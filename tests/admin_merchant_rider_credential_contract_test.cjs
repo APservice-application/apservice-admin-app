@@ -31,5 +31,6 @@ assert.match(storeUi, /select name="category_id"/, 'Store create form must offer
 assert.match(storeUi, /store_categories\?select=id,name,icon/, 'Category dropdown must load real categories from the server');
 assert.match(storeUi, /datalist id="owner-account-list"/, 'Owner picker must offer a dropdown of existing accounts');
 assert.match(storeUi, /user_profiles\?select=user_id,display_name,email,phone,login_id&order=created_at\.desc&limit=200/, 'Owner dropdown must preload recent accounts for one-tap picking');
+assert.match(storeUi, /stores\?select=owner_id/, 'Owner dropdown must exclude accounts that already own a store');
 
 console.log('admin merchant/rider credential contract: PASS');

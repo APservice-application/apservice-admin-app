@@ -159,8 +159,13 @@
     node.querySelector('[data-owner-clear]').onclick = () => { applyPick(null); resultsBox.textContent = 'ยังไม่ได้ค้นหา'; form.elements.owner_search.value = ''; };
     const accountList = node.querySelector('#owner-account-list');
     const recentByLabel = new Map();
-    runtime().M.request('user_profiles?select=user_id,display_name,email,phone,login_id&order=created_at.desc&limit=200', { private: true, cacheTtlMs: 30_000, cacheKey: 'admin-store-create:recent-accounts' }).then(rows => {
+    Promise.all([
+      runtime().M.request('user_profiles?select=user_id,display_name,email,phone,login_id&order=created_at.desc&limit=200', { private: true, cacheTtlMs: 30_000, cacheKey: 'admin-store-create:recent-accounts' }),
+      runtime().M.request('stores?select=owner_id&limit=2000', { private: true, cacheTtlMs: 30_000, cacheKey: 'admin-store-create:taken-owners' }).catch(() => [])
+    ]).then(([rows, taken]) => {
+      const takenOwners = new Set((taken || []).map(store => store.owner_id).filter(Boolean));
       (rows || []).forEach(row => {
+        if (takenOwners.has(row.user_id)) return;
         const label = `${row.display_name || '-'} · ${row.phone || row.email || ''}${row.login_id ? ` · ${row.login_id}` : ''}`;
         if (recentByLabel.has(label)) return;
         recentByLabel.set(label, row);
