@@ -738,6 +738,74 @@ Deno.serve(async (request) => {
       return json({ ok: true, store_id: own.storeId })
     }
 
+    if (body.action === 'merchant_request_withdrawal') {
+      const own = await requireOwnStore()
+      if (!own.storeId) return json({ error: own.error }, 403)
+      const storeId = own.storeId
+      const rawAmount = body.amount === undefined || body.amount === null || body.amount === '' ? null : Number(body.amount)
+      if (rawAmount !== null && (!Number.isFinite(rawAmount) || rawAmount <= 0)) return json({ error: 'กรุณาระบุยอดถอนที่ถูกต้อง' }, 400)
+      const wantFull = rawAmount === null
+      const requested = wantFull ? 0 : Math.round(rawAmount * 100) / 100
+      const { data: store, error: storeError } = await admin.from('stores').select('name,settlement_gp_percent,payout_method,payout_bank_name,payout_account_name,payout_account_number,payout_qr_url,settlement_note').eq('id', storeId).maybeSingle()
+      if (storeError) return json({ error: storeError.message }, 400)
+      if (!store) return json({ error: 'ไม่พบข้อมูลร้านค้า' }, 404)
+      const { data: openRequest } = await admin.from('withdrawal_requests').select('id').eq('store_id', storeId).in('status', ['requested', 'approved']).maybeSingle()
+      if (openRequest) return json({ error: 'มีคำขอถอนที่รอตรวจสอบอยู่แล้ว กรุณารอผลก่อนยื่นคำขอใหม่' }, 409)
+      const gp = Math.min(100, Math.max(0, Number(store.settlement_gp_percent || 0)))
+      const loadCandidates = async () => {
+        const { data: orders, error: ordersError } = await admin.from('delivery_orders').select('id,total,delivery_fee,completed_at').eq('store_id', storeId).not('completed_at', 'is', null).order('completed_at', { ascending: true }).limit(2000)
+        if (ordersError) throw new Error(ordersError.message)
+        const orderIds = (orders || []).map(order => order.id)
+        if (!orderIds.length) return []
+        const [settled, tied, items] = await Promise.all([
+          admin.from('settlement_items').select('order_id').eq('recipient_type', 'store').in('order_id', orderIds).limit(5000),
+          admin.from('withdrawal_request_items').select('order_id,withdrawal_request_id').eq('recipient_type', 'store').in('order_id', orderIds).limit(5000),
+          admin.from('delivery_order_items').select('order_id,unit_price,quantity').in('order_id', orderIds).limit(20000),
+        ])
+        if (settled.error) throw new Error(settled.error.message)
+        if (tied.error) throw new Error(tied.error.message)
+        if (items.error) throw new Error(items.error.message)
+        const blocked = new Set((settled.data || []).map(row => row.order_id))
+        const tiedRequestIds = [...new Set((tied.data || []).map(row => row.withdrawal_request_id))]
+        if (tiedRequestIds.length) {
+          const { data: liveRequests } = await admin.from('withdrawal_requests').select('id').in('id', tiedRequestIds).in('status', ['requested', 'approved', 'paid'])
+          const live = new Set((liveRequests || []).map(row => row.id))
+          ;(tied.data || []).forEach(row => { if (live.has(row.withdrawal_request_id)) blocked.add(row.order_id) })
+        }
+        const totals = new Map<string, number>()
+        ;(items.data || []).forEach(row => totals.set(row.order_id, (totals.get(row.order_id) || 0) + Number(row.unit_price || 0) * Number(row.quantity || 0)))
+        return (orders || [])
+          .filter(order => !blocked.has(order.id))
+          .map(order => {
+            const gross = totals.has(order.id) ? Number(totals.get(order.id)) : Math.max(Number(order.total || 0) - Number(order.delivery_fee || 0), 0)
+            return { id: order.id, gross: Math.round(gross * 100) / 100, net: Math.round(gross * (1 - gp / 100) * 100) / 100 }
+          })
+          .filter(order => order.net > 0)
+      }
+      const candidates = await loadCandidates()
+      const available = Math.round(candidates.reduce((sum, order) => sum + order.net, 0) * 100) / 100
+      if (!candidates.length || available <= 0) return json({ error: 'ไม่มียอดพร้อมถอนในขณะนี้' }, 400)
+      let picked = candidates
+      if (!wantFull) {
+        if (requested > available) return json({ error: `ยอดขอถอนเกินยอดที่ถอนได้ (ถอนได้สูงสุด ${available.toLocaleString('th-TH')} บาท)` }, 400)
+        picked = []
+        let running = 0
+        for (const order of candidates) { if (running + order.net - requested > 0.001) break; picked.push(order); running = Math.round((running + order.net) * 100) / 100 }
+        if (!picked.length) return json({ error: `ยอดที่ระบุน้อยกว่าบิลแรกที่ถอนได้ (${candidates[0].net.toLocaleString('th-TH')} บาท) กรุณาระบุเพิ่มหรือเลือกถอนเต็มยอด` }, 400)
+      }
+      const actual = Math.round(picked.reduce((sum, order) => sum + order.net, 0) * 100) / 100
+      const fresh = await loadCandidates()
+      const freshIds = new Set(fresh.map(order => order.id))
+      if (!picked.every(order => freshIds.has(order.id))) return json({ error: 'มียอดเปลี่ยนแปลงระหว่างยื่นคำขอ กรุณาลองใหม่' }, 409)
+      const snapshot: Record<string, unknown> = {}
+      ;[['method', store.payout_method], ['bank_name', store.payout_bank_name], ['account_name', store.payout_account_name], ['account_number', store.payout_account_number], ['qr_url', store.payout_qr_url], ['note', store.settlement_note]].forEach(([key, value]) => { if (value !== null && value !== undefined && String(value).trim() !== '') snapshot[key] = value })
+      const { data: created, error: createError } = await admin.from('withdrawal_requests').insert({ recipient_type: 'store', store_id: storeId, rider_id: null, recipient_name: text(store.name), amount: actual, payout_snapshot: snapshot, recipient_note: text(body.note).slice(0, 500) }).select('id').single()
+      if (createError || !created) return json({ error: createError?.message || 'ยื่นคำขอถอนไม่สำเร็จ' }, 400)
+      const { error: itemsError } = await admin.from('withdrawal_request_items').insert(picked.map(order => ({ withdrawal_request_id: created.id, recipient_type: 'store', order_id: order.id, gross_amount: order.gross, net_amount: order.net })))
+      if (itemsError) { await admin.from('withdrawal_requests').delete().eq('id', created.id); return json({ error: itemsError.message }, 400) }
+      return json({ ok: true, request_id: created.id, amount: actual, order_count: picked.length })
+    }
+
     if (body.action === 'resolve_order_cancellation') {
       const requestId = text(body.request_id)
       const decision = text(body.decision)

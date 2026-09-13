@@ -36,6 +36,9 @@ assert.match(source, /body\.action === 'merchant_menu_list'/, 'Edge must expose 
 assert.match(source, /from\('menu_categories'\)\.select\('id,name,icon,sort_order,active'\)/, 'Menu listing must read real store categories');
 assert.match(source, /\.is\('archived_at', null\)/, 'Menu listing must exclude archived items from the active list');
 assert.match(source, /\.not\('archived_at', 'is', null\)/, 'Menu listing must return archived items separately for restore');
+assert.match(source, /body\.action === 'merchant_request_withdrawal'/, 'Edge must expose merchant withdrawal requests');
+assert.match(source, /ยอดขอถอนเกินยอดที่ถอนได้/, 'Withdrawal must reject amounts above the real available balance');
+assert.match(source, /มีคำขอถอนที่รอตรวจสอบอยู่แล้ว/, 'Withdrawal must block a second open request');
 assert.match(storeUi, /datalist id="owner-account-list"/, 'Owner picker must offer a dropdown of existing accounts');
 assert.match(storeUi, /user_profiles\?select=user_id,display_name,email,phone,login_id&order=created_at\.desc&limit=200/, 'Owner dropdown must preload recent accounts for one-tap picking');
 assert.match(storeUi, /stores\?select=owner_id/, 'Owner dropdown must exclude accounts that already own a store');
