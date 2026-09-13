@@ -27,4 +27,15 @@ assert.match(styles, /\.admin-order-grid/, 'ต้องมี grid layout ข�
 assert.match(styles, /\.admin-order-actions/, 'ต้องมี layout ของปุ่ม action บน order cards');
 assert.match(styles, /@media\(max-width:760px\).*\.admin-order-grid/s, 'Orders cards ต้องมี mobile breakpoint');
 
+assert.match(controlPlane, /C\.ADMIN_REVIEW, C\.PAYMENT_REVIEW, C\.PAYMENT_RETRY, C\.CREDIT_REVIEW/, 'คิวรอแอดมินตรวจสอบต้องอยู่ในกลุ่มออเดอร์ใหม่');
+assert.match(controlPlane, /data-detail-call/, 'รายละเอียดออเดอร์ต้องมีปุ่มโทรหาร้านค้า');
+assert.match(controlPlane, /data-detail-release/, 'รายละเอียดออเดอร์ต้องมีปุ่มปล่อยออเดอร์ให้ร้านค้าเมื่ออยู่ในคิวตรวจ');
+assert.match(controlPlane, /function releaseOrderToStore\(order, onSaved\)/, 'ต้องมีขั้นตอนปล่อยออเดอร์ให้ร้านค้า');
+assert.match(controlPlane, /manageOrder\(order, 'status', \{ status: C\.STORE_ACCEPTED \}/, 'การปล่อยออเดอร์ต้องเปลี่ยนสถานะเป็นร้านค้ารับออร์เดอร์ผ่าน edge');
+assert.match(controlPlane, /audit\('admin_order_store_called'/, 'การโทรหาร้านค้าต้องถูกบันทึก audit');
+assert.match(controlPlane, /audit\('admin_order_released_to_store'/, 'การปล่อยออเดอร์ต้องถูกบันทึก audit');
+assert.match(controlPlane, /window\.location\.href = `tel:/, 'ปุ่มโทรหาร้านค้าต้องเปิดตัวโทรออก');
+assert.match(controlPlane, /มอบหมายไรเดอร์ไม่ได้/, 'ต้องห้ามมอบหมายไรเดอร์ก่อนแอดมินปล่อยออเดอร์');
+assert.match(controlPlane, /ยังไม่ผ่านการตรวจและปล่อยจากแอดมิน/, 'ข้อความกันมอบหมายไรเดอร์ต้องสื่อว่ายังไม่ผ่านการตรวจ');
+
 console.log('admin orders grouping contract: PASS');

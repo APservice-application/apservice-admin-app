@@ -35,7 +35,7 @@
   const statusLabel = status => ({ completed: 'เสร็จสิ้น', cancelled: 'ยกเลิก', canceled: 'ยกเลิก', suspended: 'ระงับแล้ว' }[String(status || '').toLowerCase()] || String(status || 'ไม่ระบุ'));
   const canonicalStatuses = () => runtime()?.C?.contracts?.orderStatus || window.APServiceCore?.contracts?.orderStatus || {};
   const isHistory = status => { const value = String(status || '').trim().toLowerCase(); const C = canonicalStatuses(); return status === C.COMPLETED || status === C.CANCELLED || legacyHistoryStatuses.has(String(status || '').trim()) || legacyHistoryStatuses.has(value) || value.includes('completed') || value.includes('cancel') || value.includes('suspend') || value.includes('สำเร็จ') || value.includes('ยกเลิก') || value.includes('ระงับ'); };
-  const orderBucket = status => { const C = canonicalStatuses(); if (isHistory(status)) return 'history'; if ([C.PAYMENT_REVIEW, C.PAYMENT_RETRY, C.CREDIT_REVIEW].includes(status) || legacyNewStatuses.has(String(status || '').trim())) return 'new'; return 'active'; };
+  const orderBucket = status => { const C = canonicalStatuses(); if (isHistory(status)) return 'history'; if ([C.ADMIN_REVIEW, C.PAYMENT_REVIEW, C.PAYMENT_RETRY, C.CREDIT_REVIEW].includes(status) || legacyNewStatuses.has(String(status || '').trim())) return 'new'; return 'active'; };
 
   async function audit(action, targetUserId, reason, beforeState, afterState) {
     const user = runtime()?.user;
@@ -142,6 +142,8 @@
   }
 
   function riderAssignment(order, onSaved) {
+    const gate = canonicalStatuses();
+    if ([gate.ADMIN_REVIEW, gate.PAYMENT_REVIEW, gate.PAYMENT_RETRY, gate.CREDIT_REVIEW].filter(Boolean).includes(order.status)) return notice('ออเดอร์นี้ยังไม่ผ่านการตรวจและปล่อยจากแอดมิน จึงมอบหมายไรเดอร์ไม่ได้', 'error');
     const body = `<label class="mpa-field"><span>เลือก ไรเดอร์</span><select id="riderSelect"><option value="">กำลังโหลด ไรเดอร์…</option></select></label>${override().fields('rider-assignment', { label: 'เหตุผลการมอบหมายหรือยกเลิก ไรเดอร์', placeholder: 'เช่น รถเดิมขัดข้องและ ไรเดอร์ คนใหม่อยู่ใกล้จุดรับ' })}<div class="admin-modal-actions"><button type="button" class="mpa-button mpa-button-secondary" data-close>ยกเลิก</button><button type="button" class="mpa-button" id="saveไรเดอร์">บันทึกการมอบหมาย</button></div>`;
     const dialog = modal(`มอบหมาย ไรเดอร์ · ${order.id}`, body, 'มอบหมาย ไรเดอร์');
     const select = dialog.backdrop.querySelector('#riderSelect');
@@ -214,6 +216,40 @@
     };
   }
 
+  const releasableToStore = order => {
+    const C = canonicalStatuses();
+    return Boolean(C?.ADMIN_REVIEW && order?.status === C.ADMIN_REVIEW && runtime()?.C?.order?.canTransition
+      && runtime().C.order.canTransition({ from: order.status, to: C.STORE_ACCEPTED, actor: 'admin' }).ok);
+  };
+
+  function releaseOrderToStore(order, onSaved) {
+    const C = canonicalStatuses();
+    if (!releasableToStore(order)) return notice('ออเดอร์นี้ไม่ได้อยู่ในคิวรอแอดมินตรวจสอบ', 'error');
+    const body = `<p class="mpa-muted">กรุณาโทรหาร้านค้าเพื่อยืนยันสต๊อกและเวลาทำก่อนกดปล่อย เมื่อปล่อยแล้วสถานะจะเป็น “${esc(C.STORE_ACCEPTED)}” และร้านค้ากับไรเดอร์จะเห็นออเดอร์นี้</p>${override().fields('order-release', { label: 'บันทึกการโทรยืนยันร้านค้า', placeholder: 'เช่น โทรหาร้านแล้ว ยืนยันมีสต๊อกพร้อมทำ 15 นาที' })}<div class="admin-modal-actions"><button type="button" class="mpa-button mpa-button-secondary" data-close>ยกเลิก</button><button type="button" class="mpa-button" id="saveOrderRelease">ปล่อยออเดอร์ให้ร้านค้า</button></div>`;
+    const dialog = modal(`ปล่อยออเดอร์ให้ร้านค้า · ${order.id}`, body, 'ปล่อยออเดอร์ให้ร้านค้า');
+    dialog.backdrop.querySelector('#saveOrderRelease').onclick = async () => {
+      const save = dialog.backdrop.querySelector('#saveOrderRelease'); save.disabled = true;
+      try {
+        const governance = await override().collect(dialog.backdrop, 'order-release', `คุณกำลังปล่อยออเดอร์ ${order.id} ให้ร้านค้า`);
+        await manageOrder(order, 'status', { status: C.STORE_ACCEPTED }, governance.reason, governance.evidencePath);
+        await audit('admin_order_released_to_store', order.customer_id || null, governance.reason, { order_id: order.id, status: order.status }, { order_id: order.id, status: C.STORE_ACCEPTED });
+        notice('ปล่อยออเดอร์ให้ร้านค้าแล้ว'); dialog.close(); onSaved();
+      } catch (error) { save.disabled = false; notice(`ปล่อยออเดอร์ไม่สำเร็จ: ${error.message}`, 'error'); }
+    };
+  }
+
+  async function callStoreForOrder(order) {
+    if (!order?.store_id) return notice('ออเดอร์นี้ไม่มีข้อมูลร้านค้า', 'error');
+    try {
+      const rows = await request(`stores?select=id,name,phone&id=eq.${encodeURIComponent(order.store_id)}&limit=1`);
+      const store = rows?.[0] || {};
+      const phone = String(store.phone || '').trim();
+      await audit('admin_order_store_called', order.customer_id || null, `โทรหาร้าน ${store.name || order.store_name || ''} เพื่อยืนยันออเดอร์ ${order.id}`, { order_id: order.id, store_id: order.store_id }, { phone: phone || 'ไม่มีเบอร์ในระบบ' });
+      if (!phone) return notice('ร้านนี้ยังไม่มีเบอร์โทรในระบบ กรุณาติดต่อผ่านช่องทางอื่น', 'error');
+      window.location.href = `tel:${phone.replace(/[^+0-9]/g, '')}`;
+    } catch (error) { notice(`โทรหาร้านค้าไม่สำเร็จ: ${error.message}`, 'error'); }
+  }
+
   function ordersPatch() {
     const R = runtime();
     if (!R) return;
@@ -232,7 +268,10 @@
       const load = async () => { host.innerHTML = M.ui.loading('กำลังโหลดข้อมูลออเดอร์…'); const result = await Promise.all([request('delivery_orders?select=id,customer_id,customer_name,store_id,store_name,rider_id,rider_name,ride_selected_rider_id,status,total,payable,delivery_fee,credit_used,payment_method,dispatch_status,assigned_at,estimated_arrival_at,eta_source,dispatch_note,dispatch_updated_at,ordered_at,updated_at&order=ordered_at.desc&limit=500'), request('mobile_notifications?select=id,status,created_at&status=in.(pending,failed)&order=created_at.desc&limit=100').catch(() => [])]); rows = result[0] || []; notificationCount = (result[1] || []).length; render(); };
       const dispatchLabel = row => ({ unassigned: 'ยังไม่มอบหมาย', assigned: 'มอบหมายแล้ว', en_route: 'กำลังไปจุดรับ', arrived_pickup: 'ถึงจุดรับแล้ว', picked_up: 'รับสินค้าแล้ว', delivering: 'กำลังไปส่ง', delivered: 'ส่งสำเร็จ', exception: 'มีเหตุขัดข้อง' }[row.dispatch_status] || (row.rider_id ? 'มอบหมายแล้ว' : 'ยังไม่มอบหมาย'));
       const openOrderDetail = async row => {
-        const detail = modal(`รายละเอียดออเดอร์ · ${row.id}`, `<div class="admin-order-detail-summary"><span class="mpa-badge">${esc(statusText(row))}</span><span class="admin-order-work-state admin-order-work-${esc(workState(row).key)}"><b aria-hidden="true">${esc(workState(row).icon)}</b>${esc(workState(row).label)}</span><p class="mpa-muted">สั่งเมื่อ ${row.ordered_at ? esc(new Date(row.ordered_at).toLocaleString('th-TH')) : '-'}</p></div><dl class="admin-order-detail-grid"><div><dt>เลขออเดอร์</dt><dd>${esc(row.id)}</dd></div><div><dt>ลูกค้า</dt><dd>${esc(row.customer_name || '-')}</dd></div><div><dt>ร้านค้า</dt><dd>${esc(row.store_name || '-')}</dd></div><div><dt>ผู้รับงาน</dt><dd>${row.rider_name ? `🛵 ${esc(row.rider_name)}` : 'ยังไม่มีผู้รับงาน'}</dd></div><div><dt>การจัดส่ง</dt><dd>${esc(dispatchLabel(row))}</dd></div><div><dt>ที่อยู่จัดส่ง</dt><dd>${esc(row.delivery_address || '-')}</dd></div><div><dt>วิธีชำระเงิน</dt><dd>${esc(row.payment_method || 'ไม่ระบุ')}</dd></div><div><dt>สถานะการชำระเงิน</dt><dd>${esc(row.payment_status || (row.payment_confirmed_at ? 'ยืนยันแล้ว' : 'ยังไม่ยืนยัน'))}</dd></div><div><dt>ยอดสินค้า</dt><dd>${money(row.total)}</dd></div><div><dt>ค่าจัดส่ง</dt><dd>${money(row.delivery_fee)}</dd></div><div><dt>เครดิตที่ใช้</dt><dd>${money(row.credit_used)}</dd></div><div><dt>ยอดชำระ</dt><dd><strong>${money(row.payable ?? row.total)}</strong></dd></div><div><dt>เวลาถึงโดยประมาณ</dt><dd>${row.estimated_arrival_at ? esc(new Date(row.estimated_arrival_at).toLocaleString('th-TH')) : 'ยังไม่กำหนด'}</dd></div><div><dt>อัปเดตล่าสุด</dt><dd>${row.updated_at ? esc(new Date(row.updated_at).toLocaleString('th-TH')) : '-'}</dd></div></dl><section class="admin-order-detail-items"><h3>รายการสินค้า</h3><div data-order-items>${M.ui.loading('กำลังอ่านรายการสินค้า…')}</div></section><section class="admin-order-detail-notes"><h3>หมายเหตุและการปฏิบัติงาน</h3><p>${esc(row.delivery_note || row.dispatch_note || row.notes || 'ไม่มีหมายเหตุ')}</p></section><div class="admin-order-detail-actions"><button class="mpa-button" data-detail-status>เปลี่ยนสถานะ</button><button class="mpa-button mpa-button-secondary" data-detail-core>แก้ข้อมูลหลัก</button><button class="mpa-button mpa-button-secondary" data-detail-edit>แก้รายการสินค้า</button><button class="mpa-button mpa-button-secondary" data-detail-assign>เปลี่ยนผู้รับงาน</button><button class="mpa-button mpa-button-secondary" data-detail-dispatch>แก้การจัดส่งและเวลาถึง</button><button class="mpa-button mpa-button-secondary" data-detail-history>ดูประวัติออเดอร์</button></div>`, `รายละเอียดออเดอร์ ${row.id}`);
+        const releaseButtons = releasableToStore(row)
+          ? `<button class="mpa-button mpa-button-secondary" data-detail-call>โทรหาร้านค้า</button><button class="mpa-button" data-detail-release>ปล่อยออเดอร์ให้ร้านค้า</button>`
+          : `<button class="mpa-button mpa-button-secondary" data-detail-call>โทรหาร้านค้า</button>`;
+        const detail = modal(`รายละเอียดออเดอร์ · ${row.id}`, `<div class="admin-order-detail-summary"><span class="mpa-badge">${esc(statusText(row))}</span><span class="admin-order-work-state admin-order-work-${esc(workState(row).key)}"><b aria-hidden="true">${esc(workState(row).icon)}</b>${esc(workState(row).label)}</span><p class="mpa-muted">สั่งเมื่อ ${row.ordered_at ? esc(new Date(row.ordered_at).toLocaleString('th-TH')) : '-'}</p></div><dl class="admin-order-detail-grid"><div><dt>เลขออเดอร์</dt><dd>${esc(row.id)}</dd></div><div><dt>ลูกค้า</dt><dd>${esc(row.customer_name || '-')}</dd></div><div><dt>ร้านค้า</dt><dd>${esc(row.store_name || '-')}</dd></div><div><dt>ผู้รับงาน</dt><dd>${row.rider_name ? `🛵 ${esc(row.rider_name)}` : 'ยังไม่มีผู้รับงาน'}</dd></div><div><dt>การจัดส่ง</dt><dd>${esc(dispatchLabel(row))}</dd></div><div><dt>ที่อยู่จัดส่ง</dt><dd>${esc(row.delivery_address || '-')}</dd></div><div><dt>วิธีชำระเงิน</dt><dd>${esc(row.payment_method || 'ไม่ระบุ')}</dd></div><div><dt>สถานะการชำระเงิน</dt><dd>${esc(row.payment_status || (row.payment_confirmed_at ? 'ยืนยันแล้ว' : 'ยังไม่ยืนยัน'))}</dd></div><div><dt>ยอดสินค้า</dt><dd>${money(row.total)}</dd></div><div><dt>ค่าจัดส่ง</dt><dd>${money(row.delivery_fee)}</dd></div><div><dt>เครดิตที่ใช้</dt><dd>${money(row.credit_used)}</dd></div><div><dt>ยอดชำระ</dt><dd><strong>${money(row.payable ?? row.total)}</strong></dd></div><div><dt>เวลาถึงโดยประมาณ</dt><dd>${row.estimated_arrival_at ? esc(new Date(row.estimated_arrival_at).toLocaleString('th-TH')) : 'ยังไม่กำหนด'}</dd></div><div><dt>อัปเดตล่าสุด</dt><dd>${row.updated_at ? esc(new Date(row.updated_at).toLocaleString('th-TH')) : '-'}</dd></div></dl><section class="admin-order-detail-items"><h3>รายการสินค้า</h3><div data-order-items>${M.ui.loading('กำลังอ่านรายการสินค้า…')}</div></section><section class="admin-order-detail-notes"><h3>หมายเหตุและการปฏิบัติงาน</h3><p>${esc(row.delivery_note || row.dispatch_note || row.notes || 'ไม่มีหมายเหตุ')}</p></section><div class="admin-order-detail-actions">${releaseButtons}<button class="mpa-button" data-detail-status>เปลี่ยนสถานะ</button><button class="mpa-button mpa-button-secondary" data-detail-core>แก้ข้อมูลหลัก</button><button class="mpa-button mpa-button-secondary" data-detail-edit>แก้รายการสินค้า</button><button class="mpa-button mpa-button-secondary" data-detail-assign>เปลี่ยนผู้รับงาน</button><button class="mpa-button mpa-button-secondary" data-detail-dispatch>แก้การจัดส่งและเวลาถึง</button><button class="mpa-button mpa-button-secondary" data-detail-history>ดูประวัติออเดอร์</button></div>`, `รายละเอียดออเดอร์ ${row.id}`);
         const itemsHost = detail.backdrop.querySelector('[data-order-items]');
         try {
           const items = await request(`delivery_order_items?select=id,name,emoji,unit_price,quantity,options&order_id=eq.${encodeURIComponent(row.id)}&order=id.asc&limit=100`);
@@ -245,6 +284,9 @@
         detail.backdrop.querySelector('[data-detail-assign]').onclick = () => run(riderAssignment);
         detail.backdrop.querySelector('[data-detail-dispatch]').onclick = () => run(dispatchEditor);
         detail.backdrop.querySelector('[data-detail-history]').onclick = () => { detail.close(); orderHistory(row); };
+        detail.backdrop.querySelector('[data-detail-call]').onclick = () => { void callStoreForOrder(row); };
+        const releaseButton = detail.backdrop.querySelector('[data-detail-release]');
+        if (releaseButton) releaseButton.onclick = () => run(releaseOrderToStore);
       };
       const renderCard = row => { const work = workState(row); return `<article class="admin-order-row admin-order-row-${work.key}"><div class="admin-order-row-main"><span class="admin-order-row-id">${esc(row.id)}</span><strong>${esc(row.store_name || '-')}</strong><span>${esc(row.customer_name || '-')}</span><time>${row.ordered_at ? esc(new Date(row.ordered_at).toLocaleString('th-TH')) : '-'}</time></div><div class="admin-order-row-meta"><span class="admin-order-work-state admin-order-work-${work.key}" title="${esc(work.label)}"><b aria-hidden="true">${work.icon}</b>${esc(work.label)}</span><span class="mpa-badge">${esc(statusText(row))}</span><strong>${money(row.payable ?? row.total)}</strong><button class="mpa-button mpa-button-secondary" type="button" data-detail-order="${esc(row.id)}">ดูรายละเอียด</button></div></article>`; };
       const bindCards = filtered => filtered.forEach(row => document.querySelector(`[data-detail-order="${CSS.escape(row.id)}"]`)?.addEventListener('click', () => openOrderDetail(row)));

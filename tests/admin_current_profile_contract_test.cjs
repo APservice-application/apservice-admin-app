@@ -16,7 +16,7 @@ assert.doesNotMatch(patch, /profile: profilePatch/, 'Control-plane patch must no
 assert.match(runtime, /id="profileSignOut"/, 'Profile must expose an intentional logout action');
 assert.match(runtime, /href="accounts\.html">บัญชีทุกบทบาท/, 'Profile must offer a correctly labelled route to the all-account directory');
 assert.match(patch, /document\.querySelector\('#signOut'\)\?\.remove\(\)/, 'Dashboard hero must remove logout instead of promoting it as a primary CTA');
-assert.match(dashboard, /admin-control-plane-patch\.js\?v=control-plane-v5-dashboard-feature-fit/, 'Dashboard must request the logout-placement patch revision');
+assert.match(dashboard, /admin-control-plane-patch\.js\?v=control-plane-v6-dashboard-feature-fit-admin-release/, 'Dashboard must request the logout-placement patch revision');
 assert.match(styles, /admin-profile-signout/, 'Logout presentation must remain scoped to the current-admin profile');
 
 console.log('admin current profile and logout placement contract: PASS');
