@@ -37,6 +37,7 @@ assert.match(source, /from\('menu_categories'\)\.select\('id,name,icon,sort_orde
 assert.match(source, /\.is\('archived_at', null\)/, 'Menu listing must exclude archived items from the active list');
 assert.match(source, /\.not\('archived_at', 'is', null\)/, 'Menu listing must return archived items separately for restore');
 assert.match(source, /body\.action === 'merchant_request_withdrawal'/, 'Edge must expose merchant withdrawal requests');
+assert.ok(source.indexOf("body.action === 'merchant_menu_write'") < source.indexOf('เฉพาะผู้ดูแลระบบที่มีสิทธิ์ใน Supabase'), 'Merchant actions must sit before the admin-only gate');
 assert.match(source, /ยอดขอถอนเกินยอดที่ถอนได้/, 'Withdrawal must reject amounts above the real available balance');
 assert.match(source, /มีคำขอถอนที่รอตรวจสอบอยู่แล้ว/, 'Withdrawal must block a second open request');
 assert.match(storeUi, /datalist id="owner-account-list"/, 'Owner picker must offer a dropdown of existing accounts');

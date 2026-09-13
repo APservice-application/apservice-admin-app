@@ -181,7 +181,7 @@ Deno.serve(async (request) => {
       const orderId = text(body.order_id)
       const operation = text(body.operation)
       const input = (body.data && typeof body.data === 'object' ? body.data : {}) as Record<string, unknown>
-      if (!orderId || !['status', 'proof'].includes(operation)) return json({ error: 'กรุณาระบุงานและคำสั่ง Rider ที่ถูกต้อง' }, 400)
+      if (!orderId || !['status', 'proof', 'claim'].includes(operation)) return json({ error: 'กรุณาระบุงานและคำสั่ง Rider ที่ถูกต้อง' }, 400)
 
       const { data: riderRole, error: riderRoleError } = await admin.from('user_roles').select('role').eq('user_id', caller.id).eq('role', 'rider').maybeSingle()
       if (riderRoleError) return json({ error: riderRoleError.message }, 400)
@@ -190,6 +190,18 @@ Deno.serve(async (request) => {
       if (riderError) return json({ error: riderError.message }, 400)
       if (!rider) return json({ error: 'ไม่พบโปรไฟล์ Rider ที่ผูกกับบัญชีนี้' }, 404)
       if (String(rider.compliance_status || '').toLowerCase() !== 'approved') return json({ error: 'บัญชี Rider ยังไม่ผ่านการอนุมัติ จึงอัปเดตงานจัดส่งไม่ได้' }, 409)
+
+      if (operation === 'claim') {
+        const now = new Date().toISOString()
+        const { data: job, error: jobError } = await admin.from('delivery_orders').select('id,rider_id,status').eq('id', orderId).maybeSingle()
+        if (jobError) return json({ error: jobError.message }, 400)
+        if (!job || job.rider_id) return json({ error: 'งานนี้ถูกรับหรือเปลี่ยนสถานะโดยไรเดอร์คนอื่นแล้ว' }, 409)
+        if (![ORDER_STATUS.STORE_ACCEPTED, ORDER_STATUS.PREPARING].includes(String(job.status))) return json({ error: 'งานนี้ไม่อยู่ในสถานะที่รับได้' }, 409)
+        const { data: claimed, error: claimError } = await admin.from('delivery_orders').update({ rider_id: rider.id, rider_name: text(input.rider_name) || text(rider.name), status: ORDER_STATUS.RIDER_PICKUP, dispatch_status: 'assigned', assigned_at: now, updated_at: now }).eq('id', orderId).is('rider_id', null).select('id,rider_id,rider_name,status,workflow_state,dispatch_status,proof_image,delivery_started_at,completed_at,updated_at').maybeSingle()
+        if (claimError) return json({ error: claimError.message }, 400)
+        if (!claimed) return json({ error: 'งานนี้ถูกรับหรือเปลี่ยนสถานะโดยไรเดอร์คนอื่นแล้ว' }, 409)
+        return json({ ok: true, operation, order: claimed })
+      }
 
       const { data: order, error: orderError } = await admin.from('delivery_orders').select('id,rider_id,rider_name,status,proof_image,dispatch_status,workflow_state,delivery_started_at,completed_at,updated_at').eq('id', orderId).maybeSingle()
       if (orderError) return json({ error: orderError.message }, 400)
@@ -216,6 +228,163 @@ Deno.serve(async (request) => {
       if (updateError) return json({ error: updateError.message }, 400)
       if (!updated) return json({ error: 'งานจัดส่งเปลี่ยนสถานะไปแล้ว กรุณารีเฟรชแล้วลองใหม่' }, 409)
       return json({ ok: true, operation, order: updated })
+    }
+
+    const requireOwnStore = async (): Promise<{ storeId?: string; error?: string }> => {
+      const { data: roleRow } = await admin.from('user_roles').select('role').eq('user_id', caller.id).eq('role', 'store_owner').maybeSingle()
+      if (!roleRow) return { error: 'เฉพาะบัญชีเจ้าของร้านเท่านั้นที่จัดการร้านของตนเองได้' }
+      const { data: accountControl } = await admin.from('account_controls').select('status,suspension_reason').eq('user_id', caller.id).maybeSingle()
+      if (accountControl?.status === 'suspended') return { error: `บัญชีร้านค้าถูกระงับ${accountControl.suspension_reason ? `: ${accountControl.suspension_reason}` : ''}` }
+      const { data: store, error } = await admin.from('stores').select('id').eq('owner_id', caller.id).maybeSingle()
+      if (error) return { error: error.message }
+      if (!store) return { error: 'ไม่พบร้านค้าที่ผูกกับบัญชีนี้ กรุณาติดต่อผู้ดูแลระบบ' }
+      return { storeId: String(store.id) }
+    }
+    const resolveOwnMenuCategory = async (storeId: string, raw: unknown) => {
+      const id = text(raw)
+      if (!id) return null
+      const { data: category } = await admin.from('menu_categories').select('id,store_id').eq('id', id).maybeSingle()
+      if (!category || (category.store_id && category.store_id !== storeId)) return null
+      return id
+    }
+
+    if (body.action === 'merchant_menu_list') {
+      const own = await requireOwnStore()
+      if (!own.storeId) return json({ error: own.error }, 403)
+      const [items, archived, categories] = await Promise.all([
+        admin.from('menu_items').select('id,name,emoji,description,price,stock,available,promo,image_url,category_id,updated_at').eq('store_id', own.storeId).is('archived_at', null).order('name', { ascending: true }).limit(1000),
+        admin.from('menu_items').select('id,name,emoji,description,price,stock,available,promo,image_url,category_id,archived_at,archived_reason').eq('store_id', own.storeId).not('archived_at', 'is', null).order('archived_at', { ascending: false }).limit(500),
+        admin.from('menu_categories').select('id,name,icon,sort_order,active').eq('store_id', own.storeId).order('sort_order', { ascending: true }).limit(200),
+      ])
+      if (items.error) return json({ error: items.error.message }, 400)
+      return json({ ok: true, items: items.data || [], archived: archived.data || [], categories: categories.data || [] })
+    }
+
+    if (body.action === 'merchant_menu_write') {
+      const own = await requireOwnStore()
+      if (!own.storeId) return json({ error: own.error }, 403)
+      const storeId = own.storeId, op = text(body.op), now = new Date().toISOString()
+      const item = (body.item && typeof body.item === 'object' ? body.item : {}) as Record<string, unknown>
+      if (!['insert', 'update'].includes(op)) return json({ error: 'คำสั่งเมนูไม่ถูกต้อง' }, 400)
+      if (op === 'insert') {
+        const id = text(item.id).slice(0, 80) || `menu-${crypto.randomUUID()}`
+        const name = text(item.name).slice(0, 120)
+        if (!name) return json({ error: 'กรุณาระบุชื่อเมนู' }, 400)
+        const price = Number(item.price), stock = Number(item.stock)
+        if (!Number.isFinite(price) || price < 0 || price > 1000000) return json({ error: 'ราคาเมนูไม่ถูกต้อง' }, 400)
+        if (!Number.isFinite(stock) || stock < 0 || stock > 1000000) return json({ error: 'สต็อกเมนูไม่ถูกต้อง' }, 400)
+        const { data: duplicate } = await admin.from('menu_items').select('id').eq('id', id).maybeSingle()
+        if (duplicate) return json({ error: 'รหัสเมนูนี้ถูกใช้งานแล้ว กรุณาลองใหม่' }, 409)
+        const { error } = await admin.from('menu_items').insert({ id, store_id: storeId, name, emoji: text(item.emoji).slice(0, 16) || '🍜', description: text(item.description).slice(0, 800), price, stock, available: item.available === true && stock > 0, promo: item.promo === true, category_id: await resolveOwnMenuCategory(storeId, item.category_id), image_url: text(item.image_url).slice(0, 1000) || null, updated_at: now })
+        if (error) return json({ error: error.message }, 400)
+        return json({ ok: true, id })
+      }
+      const itemId = text(body.item_id || item.id)
+      if (!itemId) return json({ error: 'กรุณาระบุเมนูที่ต้องการแก้ไข' }, 400)
+      const { data: existing, error: existingError } = await admin.from('menu_items').select('id,store_id').eq('id', itemId).maybeSingle()
+      if (existingError) return json({ error: existingError.message }, 400)
+      if (!existing || existing.store_id !== storeId) return json({ error: 'ไม่พบเมนูของร้านนี้' }, 404)
+      const updates: Record<string, unknown> = { updated_at: now }
+      const has = (key: string) => Object.prototype.hasOwnProperty.call(item, key)
+      if (has('name')) { const name = text(item.name).slice(0, 120); if (!name) return json({ error: 'ชื่อเมนูห้ามว่าง' }, 400); updates.name = name }
+      if (has('emoji')) updates.emoji = text(item.emoji).slice(0, 16) || '🍜'
+      if (has('description')) updates.description = text(item.description).slice(0, 800)
+      if (has('price')) { const price = Number(item.price); if (!Number.isFinite(price) || price < 0 || price > 1000000) return json({ error: 'ราคาเมนูไม่ถูกต้อง' }, 400); updates.price = price }
+      if (has('stock')) { const stock = Number(item.stock); if (!Number.isFinite(stock) || stock < 0 || stock > 1000000) return json({ error: 'สต็อกเมนูไม่ถูกต้อง' }, 400); updates.stock = stock }
+      if (has('available')) updates.available = item.available === true
+      if (has('promo')) updates.promo = item.promo === true
+      if (has('image_url')) updates.image_url = text(item.image_url).slice(0, 1000) || null
+      if (has('category_id')) updates.category_id = await resolveOwnMenuCategory(storeId, item.category_id)
+      if (Object.keys(updates).length === 1) return json({ error: 'ไม่พบข้อมูลเมนูที่แก้ไข' }, 400)
+      const { error } = await admin.from('menu_items').update(updates).eq('id', itemId)
+      if (error) return json({ error: error.message }, 400)
+      return json({ ok: true, id: itemId })
+    }
+
+    if (body.action === 'merchant_update_store') {
+      const own = await requireOwnStore()
+      if (!own.storeId) return json({ error: own.error }, 403)
+      const input = (body.data && typeof body.data === 'object' ? body.data : {}) as Record<string, unknown>
+      const has = (key: string) => Object.prototype.hasOwnProperty.call(input, key)
+      const updates: Record<string, unknown> = { updated_at: new Date().toISOString() }
+      if (has('name')) { const name = text(input.name).slice(0, 160); if (!name) return json({ error: 'ชื่อร้านห้ามว่าง' }, 400); updates.name = name }
+      if (has('description')) updates.description = text(input.description).slice(0, 2000)
+      if (has('phone')) updates.phone = text(input.phone).slice(0, 40)
+      if (has('eta')) updates.eta = text(input.eta).slice(0, 60)
+      if (has('image_url')) updates.image_url = text(input.image_url).slice(0, 1000)
+      if (has('background_url')) updates.background_url = text(input.background_url).slice(0, 1000)
+      if (Object.keys(updates).length === 1) return json({ error: 'ไม่พบข้อมูลร้านที่แก้ไข' }, 400)
+      const { error } = await admin.from('stores').update(updates).eq('id', own.storeId)
+      if (error) return json({ error: error.message }, 400)
+      return json({ ok: true, store_id: own.storeId })
+    }
+
+    if (body.action === 'merchant_request_withdrawal') {
+      const own = await requireOwnStore()
+      if (!own.storeId) return json({ error: own.error }, 403)
+      const storeId = own.storeId
+      const rawAmount = body.amount === undefined || body.amount === null || body.amount === '' ? null : Number(body.amount)
+      if (rawAmount !== null && (!Number.isFinite(rawAmount) || rawAmount <= 0)) return json({ error: 'กรุณาระบุยอดถอนที่ถูกต้อง' }, 400)
+      const wantFull = rawAmount === null
+      const requested = wantFull ? 0 : Math.round(rawAmount * 100) / 100
+      const { data: store, error: storeError } = await admin.from('stores').select('name,settlement_gp_percent,payout_method,payout_bank_name,payout_account_name,payout_account_number,payout_qr_url,settlement_note').eq('id', storeId).maybeSingle()
+      if (storeError) return json({ error: storeError.message }, 400)
+      if (!store) return json({ error: 'ไม่พบข้อมูลร้านค้า' }, 404)
+      const { data: openRequest } = await admin.from('withdrawal_requests').select('id').eq('store_id', storeId).in('status', ['requested', 'approved']).maybeSingle()
+      if (openRequest) return json({ error: 'มีคำขอถอนที่รอตรวจสอบอยู่แล้ว กรุณารอผลก่อนยื่นคำขอใหม่' }, 409)
+      const gp = Math.min(100, Math.max(0, Number(store.settlement_gp_percent || 0)))
+      const loadCandidates = async () => {
+        const { data: orders, error: ordersError } = await admin.from('delivery_orders').select('id,total,delivery_fee,completed_at').eq('store_id', storeId).not('completed_at', 'is', null).order('completed_at', { ascending: true }).limit(2000)
+        if (ordersError) throw new Error(ordersError.message)
+        const orderIds = (orders || []).map(order => order.id)
+        if (!orderIds.length) return []
+        const [settled, tied, items] = await Promise.all([
+          admin.from('settlement_items').select('order_id').eq('recipient_type', 'store').in('order_id', orderIds).limit(5000),
+          admin.from('withdrawal_request_items').select('order_id,withdrawal_request_id').eq('recipient_type', 'store').in('order_id', orderIds).limit(5000),
+          admin.from('delivery_order_items').select('order_id,unit_price,quantity').in('order_id', orderIds).limit(20000),
+        ])
+        if (settled.error) throw new Error(settled.error.message)
+        if (tied.error) throw new Error(tied.error.message)
+        if (items.error) throw new Error(items.error.message)
+        const blocked = new Set((settled.data || []).map(row => row.order_id))
+        const tiedRequestIds = [...new Set((tied.data || []).map(row => row.withdrawal_request_id))]
+        if (tiedRequestIds.length) {
+          const { data: liveRequests } = await admin.from('withdrawal_requests').select('id').in('id', tiedRequestIds).in('status', ['requested', 'approved', 'paid'])
+          const live = new Set((liveRequests || []).map(row => row.id))
+          ;(tied.data || []).forEach(row => { if (live.has(row.withdrawal_request_id)) blocked.add(row.order_id) })
+        }
+        const totals = new Map<string, number>()
+        ;(items.data || []).forEach(row => totals.set(row.order_id, (totals.get(row.order_id) || 0) + Number(row.unit_price || 0) * Number(row.quantity || 0)))
+        return (orders || [])
+          .filter(order => !blocked.has(order.id))
+          .map(order => {
+            const gross = totals.has(order.id) ? Number(totals.get(order.id)) : Math.max(Number(order.total || 0) - Number(order.delivery_fee || 0), 0)
+            return { id: order.id, gross: Math.round(gross * 100) / 100, net: Math.round(gross * (1 - gp / 100) * 100) / 100 }
+          })
+          .filter(order => order.net > 0)
+      }
+      const candidates = await loadCandidates()
+      const available = Math.round(candidates.reduce((sum, order) => sum + order.net, 0) * 100) / 100
+      if (!candidates.length || available <= 0) return json({ error: 'ไม่มียอดพร้อมถอนในขณะนี้' }, 400)
+      let picked = candidates
+      if (!wantFull) {
+        if (requested > available) return json({ error: `ยอดขอถอนเกินยอดที่ถอนได้ (ถอนได้สูงสุด ${available.toLocaleString('th-TH')} บาท)` }, 400)
+        picked = []
+        let running = 0
+        for (const order of candidates) { if (running + order.net - requested > 0.001) break; picked.push(order); running = Math.round((running + order.net) * 100) / 100 }
+        if (!picked.length) return json({ error: `ยอดที่ระบุน้อยกว่าบิลแรกที่ถอนได้ (${candidates[0].net.toLocaleString('th-TH')} บาท) กรุณาระบุเพิ่มหรือเลือกถอนเต็มยอด` }, 400)
+      }
+      const actual = Math.round(picked.reduce((sum, order) => sum + order.net, 0) * 100) / 100
+      const fresh = await loadCandidates()
+      const freshIds = new Set(fresh.map(order => order.id))
+      if (!picked.every(order => freshIds.has(order.id))) return json({ error: 'มียอดเปลี่ยนแปลงระหว่างยื่นคำขอ กรุณาลองใหม่' }, 409)
+      const snapshot: Record<string, unknown> = {}
+      ;[['method', store.payout_method], ['bank_name', store.payout_bank_name], ['account_name', store.payout_account_name], ['account_number', store.payout_account_number], ['qr_url', store.payout_qr_url], ['note', store.settlement_note]].forEach(([key, value]) => { if (value !== null && value !== undefined && String(value).trim() !== '') snapshot[key] = value })
+      const { data: created, error: createError } = await admin.from('withdrawal_requests').insert({ recipient_type: 'store', store_id: storeId, rider_id: null, recipient_name: text(store.name), amount: actual, payout_snapshot: snapshot, recipient_note: text(body.note).slice(0, 500) }).select('id').single()
+      if (createError || !created) return json({ error: createError?.message || 'ยื่นคำขอถอนไม่สำเร็จ' }, 400)
+      const { error: itemsError } = await admin.from('withdrawal_request_items').insert(picked.map(order => ({ withdrawal_request_id: created.id, recipient_type: 'store', order_id: order.id, gross_amount: order.gross, net_amount: order.net })))
+      if (itemsError) { await admin.from('withdrawal_requests').delete().eq('id', created.id); return json({ error: itemsError.message }, 400) }
+      return json({ ok: true, request_id: created.id, amount: actual, order_count: picked.length })
     }
 
     const { data: adminRole } = await admin.from('user_roles').select('role').eq('user_id', caller.id).eq('role', 'admin').maybeSingle()
@@ -647,163 +816,6 @@ Deno.serve(async (request) => {
       if (authUpdates.email) await admin.from('stores').update({ owner_email: authUpdates.email, updated_at: new Date().toISOString() }).eq('id', entityId)
       await admin.from('admin_action_audit').insert({ actor_id: caller.id, target_user_id: userId, action: 'store_account_updated', after_state: { store_id: entityId, fields: Object.keys(input) } })
       return json({ ok: true, entity_id: entityId })
-    }
-
-    const requireOwnStore = async (): Promise<{ storeId?: string; error?: string }> => {
-      const { data: roleRow } = await admin.from('user_roles').select('role').eq('user_id', caller.id).eq('role', 'store_owner').maybeSingle()
-      if (!roleRow) return { error: 'เฉพาะบัญชีเจ้าของร้านเท่านั้นที่จัดการร้านของตนเองได้' }
-      const { data: accountControl } = await admin.from('account_controls').select('status,suspension_reason').eq('user_id', caller.id).maybeSingle()
-      if (accountControl?.status === 'suspended') return { error: `บัญชีร้านค้าถูกระงับ${accountControl.suspension_reason ? `: ${accountControl.suspension_reason}` : ''}` }
-      const { data: store, error } = await admin.from('stores').select('id').eq('owner_id', caller.id).maybeSingle()
-      if (error) return { error: error.message }
-      if (!store) return { error: 'ไม่พบร้านค้าที่ผูกกับบัญชีนี้ กรุณาติดต่อผู้ดูแลระบบ' }
-      return { storeId: String(store.id) }
-    }
-    const resolveOwnMenuCategory = async (storeId: string, raw: unknown) => {
-      const id = text(raw)
-      if (!id) return null
-      const { data: category } = await admin.from('menu_categories').select('id,store_id').eq('id', id).maybeSingle()
-      if (!category || (category.store_id && category.store_id !== storeId)) return null
-      return id
-    }
-
-    if (body.action === 'merchant_menu_list') {
-      const own = await requireOwnStore()
-      if (!own.storeId) return json({ error: own.error }, 403)
-      const [items, archived, categories] = await Promise.all([
-        admin.from('menu_items').select('id,name,emoji,description,price,stock,available,promo,image_url,category_id,updated_at').eq('store_id', own.storeId).is('archived_at', null).order('name', { ascending: true }).limit(1000),
-        admin.from('menu_items').select('id,name,emoji,description,price,stock,available,promo,image_url,category_id,archived_at,archived_reason').eq('store_id', own.storeId).not('archived_at', 'is', null).order('archived_at', { ascending: false }).limit(500),
-        admin.from('menu_categories').select('id,name,icon,sort_order,active').eq('store_id', own.storeId).order('sort_order', { ascending: true }).limit(200),
-      ])
-      if (items.error) return json({ error: items.error.message }, 400)
-      return json({ ok: true, items: items.data || [], archived: archived.data || [], categories: categories.data || [] })
-    }
-
-    if (body.action === 'merchant_menu_write') {
-      const own = await requireOwnStore()
-      if (!own.storeId) return json({ error: own.error }, 403)
-      const storeId = own.storeId, op = text(body.op), now = new Date().toISOString()
-      const item = (body.item && typeof body.item === 'object' ? body.item : {}) as Record<string, unknown>
-      if (!['insert', 'update'].includes(op)) return json({ error: 'คำสั่งเมนูไม่ถูกต้อง' }, 400)
-      if (op === 'insert') {
-        const id = text(item.id).slice(0, 80) || `menu-${crypto.randomUUID()}`
-        const name = text(item.name).slice(0, 120)
-        if (!name) return json({ error: 'กรุณาระบุชื่อเมนู' }, 400)
-        const price = Number(item.price), stock = Number(item.stock)
-        if (!Number.isFinite(price) || price < 0 || price > 1000000) return json({ error: 'ราคาเมนูไม่ถูกต้อง' }, 400)
-        if (!Number.isFinite(stock) || stock < 0 || stock > 1000000) return json({ error: 'สต็อกเมนูไม่ถูกต้อง' }, 400)
-        const { data: duplicate } = await admin.from('menu_items').select('id').eq('id', id).maybeSingle()
-        if (duplicate) return json({ error: 'รหัสเมนูนี้ถูกใช้งานแล้ว กรุณาลองใหม่' }, 409)
-        const { error } = await admin.from('menu_items').insert({ id, store_id: storeId, name, emoji: text(item.emoji).slice(0, 16) || '🍜', description: text(item.description).slice(0, 800), price, stock, available: item.available === true && stock > 0, promo: item.promo === true, category_id: await resolveOwnMenuCategory(storeId, item.category_id), image_url: text(item.image_url).slice(0, 1000) || null, updated_at: now })
-        if (error) return json({ error: error.message }, 400)
-        return json({ ok: true, id })
-      }
-      const itemId = text(body.item_id || item.id)
-      if (!itemId) return json({ error: 'กรุณาระบุเมนูที่ต้องการแก้ไข' }, 400)
-      const { data: existing, error: existingError } = await admin.from('menu_items').select('id,store_id').eq('id', itemId).maybeSingle()
-      if (existingError) return json({ error: existingError.message }, 400)
-      if (!existing || existing.store_id !== storeId) return json({ error: 'ไม่พบเมนูของร้านนี้' }, 404)
-      const updates: Record<string, unknown> = { updated_at: now }
-      const has = (key: string) => Object.prototype.hasOwnProperty.call(item, key)
-      if (has('name')) { const name = text(item.name).slice(0, 120); if (!name) return json({ error: 'ชื่อเมนูห้ามว่าง' }, 400); updates.name = name }
-      if (has('emoji')) updates.emoji = text(item.emoji).slice(0, 16) || '🍜'
-      if (has('description')) updates.description = text(item.description).slice(0, 800)
-      if (has('price')) { const price = Number(item.price); if (!Number.isFinite(price) || price < 0 || price > 1000000) return json({ error: 'ราคาเมนูไม่ถูกต้อง' }, 400); updates.price = price }
-      if (has('stock')) { const stock = Number(item.stock); if (!Number.isFinite(stock) || stock < 0 || stock > 1000000) return json({ error: 'สต็อกเมนูไม่ถูกต้อง' }, 400); updates.stock = stock }
-      if (has('available')) updates.available = item.available === true
-      if (has('promo')) updates.promo = item.promo === true
-      if (has('image_url')) updates.image_url = text(item.image_url).slice(0, 1000) || null
-      if (has('category_id')) updates.category_id = await resolveOwnMenuCategory(storeId, item.category_id)
-      if (Object.keys(updates).length === 1) return json({ error: 'ไม่พบข้อมูลเมนูที่แก้ไข' }, 400)
-      const { error } = await admin.from('menu_items').update(updates).eq('id', itemId)
-      if (error) return json({ error: error.message }, 400)
-      return json({ ok: true, id: itemId })
-    }
-
-    if (body.action === 'merchant_update_store') {
-      const own = await requireOwnStore()
-      if (!own.storeId) return json({ error: own.error }, 403)
-      const input = (body.data && typeof body.data === 'object' ? body.data : {}) as Record<string, unknown>
-      const has = (key: string) => Object.prototype.hasOwnProperty.call(input, key)
-      const updates: Record<string, unknown> = { updated_at: new Date().toISOString() }
-      if (has('name')) { const name = text(input.name).slice(0, 160); if (!name) return json({ error: 'ชื่อร้านห้ามว่าง' }, 400); updates.name = name }
-      if (has('description')) updates.description = text(input.description).slice(0, 2000)
-      if (has('phone')) updates.phone = text(input.phone).slice(0, 40)
-      if (has('eta')) updates.eta = text(input.eta).slice(0, 60)
-      if (has('image_url')) updates.image_url = text(input.image_url).slice(0, 1000)
-      if (has('background_url')) updates.background_url = text(input.background_url).slice(0, 1000)
-      if (Object.keys(updates).length === 1) return json({ error: 'ไม่พบข้อมูลร้านที่แก้ไข' }, 400)
-      const { error } = await admin.from('stores').update(updates).eq('id', own.storeId)
-      if (error) return json({ error: error.message }, 400)
-      return json({ ok: true, store_id: own.storeId })
-    }
-
-    if (body.action === 'merchant_request_withdrawal') {
-      const own = await requireOwnStore()
-      if (!own.storeId) return json({ error: own.error }, 403)
-      const storeId = own.storeId
-      const rawAmount = body.amount === undefined || body.amount === null || body.amount === '' ? null : Number(body.amount)
-      if (rawAmount !== null && (!Number.isFinite(rawAmount) || rawAmount <= 0)) return json({ error: 'กรุณาระบุยอดถอนที่ถูกต้อง' }, 400)
-      const wantFull = rawAmount === null
-      const requested = wantFull ? 0 : Math.round(rawAmount * 100) / 100
-      const { data: store, error: storeError } = await admin.from('stores').select('name,settlement_gp_percent,payout_method,payout_bank_name,payout_account_name,payout_account_number,payout_qr_url,settlement_note').eq('id', storeId).maybeSingle()
-      if (storeError) return json({ error: storeError.message }, 400)
-      if (!store) return json({ error: 'ไม่พบข้อมูลร้านค้า' }, 404)
-      const { data: openRequest } = await admin.from('withdrawal_requests').select('id').eq('store_id', storeId).in('status', ['requested', 'approved']).maybeSingle()
-      if (openRequest) return json({ error: 'มีคำขอถอนที่รอตรวจสอบอยู่แล้ว กรุณารอผลก่อนยื่นคำขอใหม่' }, 409)
-      const gp = Math.min(100, Math.max(0, Number(store.settlement_gp_percent || 0)))
-      const loadCandidates = async () => {
-        const { data: orders, error: ordersError } = await admin.from('delivery_orders').select('id,total,delivery_fee,completed_at').eq('store_id', storeId).not('completed_at', 'is', null).order('completed_at', { ascending: true }).limit(2000)
-        if (ordersError) throw new Error(ordersError.message)
-        const orderIds = (orders || []).map(order => order.id)
-        if (!orderIds.length) return []
-        const [settled, tied, items] = await Promise.all([
-          admin.from('settlement_items').select('order_id').eq('recipient_type', 'store').in('order_id', orderIds).limit(5000),
-          admin.from('withdrawal_request_items').select('order_id,withdrawal_request_id').eq('recipient_type', 'store').in('order_id', orderIds).limit(5000),
-          admin.from('delivery_order_items').select('order_id,unit_price,quantity').in('order_id', orderIds).limit(20000),
-        ])
-        if (settled.error) throw new Error(settled.error.message)
-        if (tied.error) throw new Error(tied.error.message)
-        if (items.error) throw new Error(items.error.message)
-        const blocked = new Set((settled.data || []).map(row => row.order_id))
-        const tiedRequestIds = [...new Set((tied.data || []).map(row => row.withdrawal_request_id))]
-        if (tiedRequestIds.length) {
-          const { data: liveRequests } = await admin.from('withdrawal_requests').select('id').in('id', tiedRequestIds).in('status', ['requested', 'approved', 'paid'])
-          const live = new Set((liveRequests || []).map(row => row.id))
-          ;(tied.data || []).forEach(row => { if (live.has(row.withdrawal_request_id)) blocked.add(row.order_id) })
-        }
-        const totals = new Map<string, number>()
-        ;(items.data || []).forEach(row => totals.set(row.order_id, (totals.get(row.order_id) || 0) + Number(row.unit_price || 0) * Number(row.quantity || 0)))
-        return (orders || [])
-          .filter(order => !blocked.has(order.id))
-          .map(order => {
-            const gross = totals.has(order.id) ? Number(totals.get(order.id)) : Math.max(Number(order.total || 0) - Number(order.delivery_fee || 0), 0)
-            return { id: order.id, gross: Math.round(gross * 100) / 100, net: Math.round(gross * (1 - gp / 100) * 100) / 100 }
-          })
-          .filter(order => order.net > 0)
-      }
-      const candidates = await loadCandidates()
-      const available = Math.round(candidates.reduce((sum, order) => sum + order.net, 0) * 100) / 100
-      if (!candidates.length || available <= 0) return json({ error: 'ไม่มียอดพร้อมถอนในขณะนี้' }, 400)
-      let picked = candidates
-      if (!wantFull) {
-        if (requested > available) return json({ error: `ยอดขอถอนเกินยอดที่ถอนได้ (ถอนได้สูงสุด ${available.toLocaleString('th-TH')} บาท)` }, 400)
-        picked = []
-        let running = 0
-        for (const order of candidates) { if (running + order.net - requested > 0.001) break; picked.push(order); running = Math.round((running + order.net) * 100) / 100 }
-        if (!picked.length) return json({ error: `ยอดที่ระบุน้อยกว่าบิลแรกที่ถอนได้ (${candidates[0].net.toLocaleString('th-TH')} บาท) กรุณาระบุเพิ่มหรือเลือกถอนเต็มยอด` }, 400)
-      }
-      const actual = Math.round(picked.reduce((sum, order) => sum + order.net, 0) * 100) / 100
-      const fresh = await loadCandidates()
-      const freshIds = new Set(fresh.map(order => order.id))
-      if (!picked.every(order => freshIds.has(order.id))) return json({ error: 'มียอดเปลี่ยนแปลงระหว่างยื่นคำขอ กรุณาลองใหม่' }, 409)
-      const snapshot: Record<string, unknown> = {}
-      ;[['method', store.payout_method], ['bank_name', store.payout_bank_name], ['account_name', store.payout_account_name], ['account_number', store.payout_account_number], ['qr_url', store.payout_qr_url], ['note', store.settlement_note]].forEach(([key, value]) => { if (value !== null && value !== undefined && String(value).trim() !== '') snapshot[key] = value })
-      const { data: created, error: createError } = await admin.from('withdrawal_requests').insert({ recipient_type: 'store', store_id: storeId, rider_id: null, recipient_name: text(store.name), amount: actual, payout_snapshot: snapshot, recipient_note: text(body.note).slice(0, 500) }).select('id').single()
-      if (createError || !created) return json({ error: createError?.message || 'ยื่นคำขอถอนไม่สำเร็จ' }, 400)
-      const { error: itemsError } = await admin.from('withdrawal_request_items').insert(picked.map(order => ({ withdrawal_request_id: created.id, recipient_type: 'store', order_id: order.id, gross_amount: order.gross, net_amount: order.net })))
-      if (itemsError) { await admin.from('withdrawal_requests').delete().eq('id', created.id); return json({ error: itemsError.message }, 400) }
-      return json({ ok: true, request_id: created.id, amount: actual, order_count: picked.length })
     }
 
     if (body.action === 'resolve_order_cancellation') {
