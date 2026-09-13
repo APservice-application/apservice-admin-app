@@ -11,7 +11,7 @@ assert.match(admin, /async function gate\(active, content\) \{\s*app\(active, co
 assert.match(admin, /sessionStorage\.getItem\(adminBadgeStorageKey\)/, 'badge ต้องแสดง cached value ก่อน refresh');
 assert.match(admin, /setTimeout\(async \(\) =>/, 'badge network refresh ต้องเลื่อนทำงานแบบ asynchronous');
 assert.match(admin, /badge failures never block a route/, 'ความล้มเหลวของ badge ต้องไม่ block navigation');
-assert.match(admin, /Promise\.all\(\[countRows\('delivery_orders/, 'badge ต้องดึง counters พร้อมกันแบบ background');
+assert.match(admin, /Promise\.all\(\[countRows\(`user_profiles/, 'badge ต้องดึง counters พร้อมกันแบบ background');
 assert.match(admin, /const dashboardCounts = async requestCount => Promise\.all/, 'dashboard ต้องโหลด summary counters พร้อมกัน');
 assert.match(admin, /createScope\(name\)/, 'route request ต้องผูก scope และยกเลิกเมื่อเปลี่ยนหน้า');
 assert.match(admin, /startBackgroundSync\(\{ key: 'admin-dashboard-counts'/, 'การ refresh dashboard ต้องเป็น background sync');
