@@ -24,5 +24,7 @@ assert.match(storeUi, /name="account_mode"/, 'Store create form must let admin c
 assert.match(storeUi, /owner_user_id/, 'Store create form must submit the picked owner account id');
 assert.match(storeUi, /ค้นหาบัญชี/, 'Store create form must offer account search for prefilling owner data');
 assert.match(storeUi, /ใช้รหัสผ่านเดิมของบัญชี/, 'Existing-account mode must keep the original password (no reset)');
+assert.doesNotMatch(source, /text\(entity\.(legal_name|registration_number|contact_name|contact_email|registered_address|pickup_address|delivery_address)\) \|\| null/, 'Store insert must never send NULL into NOT NULL DEFAULT columns (partial save must work)');
+assert.match(source, /registered_address: text\(entity\.registered_address\) \|\| ''/, 'Empty store addresses must fall back to empty string so stores can open before data is complete');
 
 console.log('admin merchant/rider credential contract: PASS');
