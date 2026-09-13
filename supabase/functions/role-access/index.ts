@@ -554,7 +554,50 @@ Deno.serve(async (request) => {
 
     if (body.action === 'provision_store_owner') {
       const entity = body.entity && typeof body.entity === 'object' ? body.entity as Record<string, unknown> : {}
-      const entityId = text(body.entity_id || entity.id), email = normalizedId(body.email), loginId = normalizedId(body.login_id), displayName = text(body.display_name), password = String(body.password || ''), phone = text(body.phone || entity.phone), storeName = text(entity.name)
+      const entityId = text(body.entity_id || entity.id), storeName = text(entity.name)
+      const ownerUserId = text(body.owner_user_id)
+      if (ownerUserId) {
+        const displayName = text(body.display_name), loginIdInput = normalizedId(body.login_id), phone = text(body.phone || entity.phone)
+        if (!entityId || !storeName || !displayName) return json({ error: 'กรุณาระบุชื่อร้านและชื่อเจ้าของร้านให้ครบถ้วน' }, 400)
+        const { data: idTaken, error: idTakenError } = await admin.from('stores').select('id').eq('id', entityId).maybeSingle()
+        if (idTakenError) return json({ error: idTakenError.message }, 400)
+        if (idTaken) return json({ error: 'รหัสร้านค้านี้ถูกใช้งานแล้ว กรุณาลองใหม่' }, 409)
+        const { data: profile, error: profileError } = await admin.from('user_profiles').select('user_id,email,display_name,login_id,phone').eq('user_id', ownerUserId).maybeSingle()
+        if (profileError) return json({ error: profileError.message }, 400)
+        if (!profile) return json({ error: 'ไม่พบบัญชีผู้ใช้ที่เลือก กรุณาค้นหาและเลือกบัญชีใหม่' }, 404)
+        const email = normalizedId(profile.email)
+        if (!looksLikeEmail(email)) return json({ error: 'บัญชีที่เลือกไม่มีอีเมลสำหรับเข้าสู่ระบบ จึงผูกเป็นเจ้าของร้านไม่ได้' }, 400)
+        const { data: accountControl } = await admin.from('account_controls').select('status,suspension_reason').eq('user_id', ownerUserId).maybeSingle()
+        if (accountControl?.status === 'suspended') return json({ error: `บัญชีที่เลือกถูกระงับ${accountControl.suspension_reason ? `: ${accountControl.suspension_reason}` : ''}` }, 403)
+        const { data: ownedStore, error: ownedError } = await admin.from('stores').select('id,name').eq('owner_id', ownerUserId).maybeSingle()
+        if (ownedError) return json({ error: ownedError.message }, 400)
+        if (ownedStore) return json({ error: `บัญชีนี้เป็นเจ้าของร้าน “${text(ownedStore.name)}” อยู่แล้ว หนึ่งบัญชีผูกได้หนึ่งร้าน` }, 409)
+        let loginId = normalizedId(profile.login_id)
+        if (!loginIdIsValid(loginId)) {
+          if (!loginIdIsValid(loginIdInput)) return json({ error: 'บัญชีนี้ยังไม่มี Login ID กรุณากำหนด Login ID ให้เจ้าของร้าน (ภาษาอังกฤษ/ตัวเลข/จุด/ขีด 3–32 ตัว)' }, 400)
+          const { data: loginTaken } = await admin.from('user_profiles').select('user_id').eq('login_id', loginIdInput).neq('user_id', ownerUserId).maybeSingle()
+          if (loginTaken) return json({ error: 'Login ID นี้ถูกใช้งานแล้ว' }, 409)
+          loginId = loginIdInput
+          const { data: authUser } = await admin.auth.admin.getUserById(ownerUserId)
+          const mergedMetadata = { ...((authUser?.user?.user_metadata as Record<string, unknown> | null) || {}), login_id: loginId, app_role: 'store_owner', display_name: displayName }
+          const { error: authError } = await admin.auth.admin.updateUserById(ownerUserId, { user_metadata: mergedMetadata })
+          if (authError) return json({ error: authError.message }, 400)
+          const { error: loginError } = await admin.from('user_profiles').update({ login_id: loginId }).eq('user_id', ownerUserId)
+          if (loginError) return json({ error: loginError.message }, 400)
+        }
+        const profileUpdates: Record<string, unknown> = {}
+        if (displayName !== text(profile.display_name)) profileUpdates.display_name = displayName
+        if (phone && phone !== text(profile.phone)) profileUpdates.phone = phone
+        if (Object.keys(profileUpdates).length) { const { error: updateError } = await admin.from('user_profiles').update(profileUpdates).eq('user_id', ownerUserId); if (updateError) return json({ error: updateError.message }, 400) }
+        const { error: roleError } = await admin.from('user_roles').upsert({ user_id: ownerUserId, role: 'store_owner' }, { onConflict: 'user_id,role' })
+        if (roleError) return json({ error: roleError.message }, 400)
+        const store = { id: entityId, owner_id: ownerUserId, owner_email: email, name: storeName, phone: phone || text(profile.phone), active: entity.active !== false, moderation_status: text(entity.moderation_status, 'active'), legal_name: text(entity.legal_name) || null, registration_number: text(entity.registration_number) || null, contact_name: text(entity.contact_name) || null, contact_email: text(entity.contact_email) || null, registered_address: text(entity.registered_address) || null, pickup_address: text(entity.pickup_address) || null, delivery_address: text(entity.delivery_address) || null, category_id: text(entity.category_id) || null, location: entity.location || null, updated_at: new Date().toISOString() }
+        const { error: storeError } = await admin.from('stores').insert(store)
+        if (storeError) return json({ error: storeError.message }, 400)
+        await admin.from('admin_action_audit').insert({ actor_id: caller.id, target_user_id: ownerUserId, action: 'store_owner_attached', after_state: { store_id: entityId, login_id: loginId, reused_account: true } })
+        return json({ ok: true, entity_id: entityId, user_id: ownerUserId, login_id: loginId, reused: true })
+      }
+      const email = normalizedId(body.email), loginId = normalizedId(body.login_id), displayName = text(body.display_name), password = String(body.password || ''), phone = text(body.phone || entity.phone)
       if (!entityId || !storeName || !looksLikeEmail(email) || !loginIdIsValid(loginId) || !displayName || !secureTemporaryPassword(password)) return json({ error: 'กรุณาระบุชื่อร้าน ชื่อเจ้าของ อีเมล Login ID และรหัสผ่านที่ปลอดภัยอย่างน้อย 12 ตัวอักษรให้ครบถ้วน' }, 400)
       const { data: duplicate } = await admin.from('user_profiles').select('user_id').or(`email.eq.${email},login_id.eq.${loginId}`).maybeSingle()
       if (duplicate) return json({ error: 'อีเมลหรือ Login ID นี้ถูกใช้งานแล้ว' }, 409)

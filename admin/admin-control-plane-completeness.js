@@ -79,12 +79,97 @@
       await invoke({ action: 'update_store_gp_rate', store_id: id, gp_percent: Number(form.elements.gp_percent.value), reason: form.elements.reason.value.trim() });
     });
   };
-  const openFullStoreCreate = () => modal('เพิ่มร้านค้าและบัญชี Merchant', 'เก็บข้อมูลเป็นหมวดเพื่อให้ Admin แก้ไขภายหลังได้โดยไม่เขียนทับข้อมูลธุรกิจส่วนอื่น', `<div class="admin-form-grid">${field('name', 'ชื่อร้านสำหรับแสดงลูกค้า', '', 'text', 'required')}${field('legal_name', 'ชื่อจดทะเบียน / ชื่อธุรกิจ')}${field('registration_number', 'เลขทะเบียน / เลขประจำตัวผู้เสียภาษี')}${field('category_id', 'ประเภทร้านสำหรับหน้าลูกค้า')}${field('phone', 'เบอร์โทรศัพท์ร้าน', '', 'tel', 'required')}${field('contact_name', 'ชื่อผู้ติดต่อหลัก')}${field('contact_email', 'อีเมลติดต่อร้าน', '', 'email')}${field('registered_address', 'ที่อยู่จดทะเบียน', '', 'textarea')}${field('pickup_address', 'ที่อยู่จุดรับสินค้า / สาขาปฏิบัติการ', '', 'textarea')}${field('delivery_address', 'ที่อยู่รับเอกสาร / ที่อยู่จัดส่ง', '', 'textarea')}${field('display_name', 'ชื่อเจ้าของร้าน / Merchant', '', 'text', 'required')}${field('email', 'อีเมลสำหรับเข้าสู่ระบบ Merchant', '', 'email', 'required')}${field('login_id', 'Login ID Merchant', '', 'text', 'required pattern="[A-Za-z0-9._-]{3,32}"')}${field('password', 'รหัสผ่านเริ่มต้น', '', 'password', 'required minlength="12" pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[^A-Za-z0-9])\\S{12,128}"')}${field('password_policy', 'เงื่อนไขรหัสผ่าน', 'อย่างน้อย 12 ตัวอักษร: พิมพ์เล็ก พิมพ์ใหญ่ ตัวเลข และอักขระพิเศษ โดยห้ามมีช่องว่าง', 'text', 'readonly aria-readonly="true"')}${field('location_lat', 'ละติจูดหมุดร้าน', '', 'number', 'step="any"')}${field('location_lng', 'ลองจิจูดหมุดร้าน', '', 'number', 'step="any"')}</div>`, 'สร้างร้านและบัญชี', async form => {
-    const id = `store-${typeof crypto?.randomUUID === 'function' ? crypto.randomUUID() : Date.now()}`; const latRaw = form.elements.location_lat.value, lngRaw = form.elements.location_lng.value; let location = null;
-    if (latRaw || lngRaw) { const lat = Number(latRaw), lng = Number(lngRaw); if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new Error('พิกัดร้านไม่ถูกต้อง'); location = { lat, lng, source: 'admin', capturedAt: new Date().toISOString() }; }
-    const values = key => form.elements[key].value.trim();
-    await invoke({ action: 'provision_store_owner', entity_id: id, email: values('email'), login_id: values('login_id'), display_name: values('display_name'), password: form.elements.password.value, phone: values('phone'), entity: { id, name: values('name'), phone: values('phone'), active: true, legal_name: values('legal_name'), registration_number: values('registration_number'), contact_name: values('contact_name'), contact_email: values('contact_email'), registered_address: values('registered_address'), pickup_address: values('pickup_address'), delivery_address: values('delivery_address'), category_id: values('category_id'), location } });
-  });
+  const searchOwnerAccounts = async query => {
+    const clean = String(query || '').replace(/[,*%()]/g, '').trim().slice(0, 60);
+    if (clean.length < 2) return [];
+    const pattern = `*${encodeURIComponent(clean)}*`;
+    return (await runtime().M.request(`user_profiles?select=user_id,display_name,email,phone,login_id&or=(display_name.ilike.${pattern},email.ilike.${pattern},phone.ilike.${pattern},login_id.ilike.${pattern})&order=display_name.asc&limit=20`, { private: true })) || [];
+  };
+  const openFullStoreCreate = () => {
+    const picked = { account: null };
+    const storeFields = `<div class="admin-form-grid">${field('name', 'ชื่อร้านสำหรับแสดงลูกค้า', '', 'text', 'required')}${field('legal_name', 'ชื่อจดทะเบียน / ชื่อธุรกิจ')}${field('registration_number', 'เลขทะเบียน / เลขประจำตัวผู้เสียภาษี')}${field('category_id', 'ประเภทร้านสำหรับหน้าลูกค้า')}${field('phone', 'เบอร์โทรศัพท์ร้าน', '', 'tel', 'required')}${field('contact_name', 'ชื่อผู้ติดต่อหลัก')}${field('contact_email', 'อีเมลติดต่อร้าน', '', 'email')}${field('registered_address', 'ที่อยู่จดทะเบียน', '', 'textarea')}${field('pickup_address', 'ที่อยู่จุดรับสินค้า / สาขาปฏิบัติการ', '', 'textarea')}${field('delivery_address', 'ที่อยู่รับเอกสาร / ที่อยู่จัดส่ง', '', 'textarea')}${field('location_lat', 'ละติจูดหมุดร้าน', '', 'number', 'step="any"')}${field('location_lng', 'ลองจิจูดหมุดร้าน', '', 'number', 'step="any"')}</div>`;
+    const node = modal('เพิ่มร้านค้าและบัญชี Merchant', 'เลือกบัญชีที่มีอยู่แล้วเพื่อดึงข้อมูลมาเปิดร้าน หรือสร้างบัญชีใหม่ ชื่อร้านกับชื่อเจ้าของแยกกันอิสระ', `
+      <div class="admin-form-section"><h3>บัญชีเจ้าของร้าน</h3>
+        <div class="mpa-field admin-form-full"><span>ที่มาของบัญชี</span><div style="display:flex;gap:12px;flex-wrap:wrap">
+          <label style="display:flex;gap:6px;align-items:center"><input type="radio" name="account_mode" value="existing" checked> ใช้บัญชีที่มีอยู่แล้ว (ดึงข้อมูลอัตโนมัติ)</label>
+          <label style="display:flex;gap:6px;align-items:center"><input type="radio" name="account_mode" value="new"> สร้างบัญชีใหม่</label>
+        </div></div>
+        <div data-owner-existing>
+          <div class="admin-form-grid"><label class="mpa-field admin-form-full">ค้นหาบัญชี (ชื่อ / เบอร์ / อีเมล / Login ID)<input name="owner_search" type="search" placeholder="พิมพ์อย่างน้อย 2 ตัวอักษร แล้วเลือกจากรายการ" autocomplete="off"></label></div>
+          <div data-owner-results class="mpa-muted" style="display:grid;gap:6px;margin:0 0 10px">ยังไม่ได้ค้นหา</div>
+          <div data-owner-picked hidden style="margin:0 0 10px"><span class="mpa-muted">เลือกแล้ว: </span><b data-owner-picked-label></b> <button type="button" class="mpa-button mpa-button-secondary" data-owner-clear>เปลี่ยนบัญชี</button></div>
+          <div class="admin-form-grid">${field('owner_email', 'อีเมลเข้าสู่ระบบของบัญชี (เดิม)', '', 'email', 'readonly aria-readonly="true"')}${field('owner_login_id', 'Login ID Merchant (ถ้าบัญชียังไม่มี ต้องกำหนด)')}${field('owner_display_name', 'ชื่อเจ้าของร้าน / Merchant', '', 'text', 'required')}</div>
+          <p class="mpa-muted admin-form-full" style="margin:0 0 10px">ใช้รหัสผ่านเดิมของบัญชี ไม่ต้องตั้งใหม่ เบอร์โทรและชื่อผู้ติดต่อจะดึงมาเติมให้ แก้ไขได้</p>
+          <input type="hidden" name="owner_user_id">
+        </div>
+        <div data-owner-new hidden>
+          <div class="admin-form-grid">${field('email', 'อีเมลสำหรับเข้าสู่ระบบ Merchant', '', 'email', 'required')}${field('login_id', 'Login ID Merchant', '', 'text', 'required pattern="[A-Za-z0-9._-]{3,32}"')}${field('display_name', 'ชื่อเจ้าของร้าน / Merchant', '', 'text', 'required')}${field('password', 'รหัสผ่านเริ่มต้น', '', 'password', 'required minlength="12" pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[^A-Za-z0-9])\\S{12,128}"')}${field('password_policy', 'เงื่อนไขรหัสผ่าน', 'อย่างน้อย 12 ตัวอักษร: พิมพ์เล็ก พิมพ์ใหญ่ ตัวเลข และอักขระพิเศษ โดยห้ามมีช่องว่าง', 'text', 'readonly aria-readonly="true"')}</div>
+        </div>
+      </div>
+      <div class="admin-form-section"><h3>ข้อมูลร้าน</h3>${storeFields}</div>`, 'สร้างร้านและบัญชี', async form => {
+      const id = `store-${typeof crypto?.randomUUID === 'function' ? crypto.randomUUID() : Date.now()}`; const latRaw = form.elements.location_lat.value, lngRaw = form.elements.location_lng.value; let location = null;
+      if (latRaw || lngRaw) { const lat = Number(latRaw), lng = Number(lngRaw); if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new Error('พิกัดร้านไม่ถูกต้อง'); location = { lat, lng, source: 'admin', capturedAt: new Date().toISOString() }; }
+      const values = key => form.elements[key].value.trim();
+      const mode = form.elements.account_mode.value;
+      const entity = { id, name: values('name'), phone: values('phone'), active: true, legal_name: values('legal_name'), registration_number: values('registration_number'), contact_name: values('contact_name'), contact_email: values('contact_email'), registered_address: values('registered_address'), pickup_address: values('pickup_address'), delivery_address: values('delivery_address'), category_id: values('category_id'), location };
+      if (mode === 'existing') {
+        const ownerUserId = values('owner_user_id');
+        if (!ownerUserId) throw new Error('กรุณาค้นหาและเลือกบัญชีเจ้าของร้านก่อน');
+        await invoke({ action: 'provision_store_owner', entity_id: id, owner_user_id: ownerUserId, login_id: values('owner_login_id'), display_name: values('owner_display_name'), phone: values('phone'), entity });
+      } else {
+        await invoke({ action: 'provision_store_owner', entity_id: id, email: values('email'), login_id: values('login_id'), display_name: values('display_name'), password: form.elements.password.value, phone: values('phone'), entity });
+      }
+    });
+    const form = node.querySelector('[data-form]');
+    const existingPane = node.querySelector('[data-owner-existing]');
+    const newPane = node.querySelector('[data-owner-new]');
+    const setMode = mode => {
+      existingPane.hidden = mode !== 'existing';
+      newPane.hidden = mode !== 'new';
+      existingPane.querySelectorAll('input').forEach(input => { input.disabled = mode !== 'existing'; });
+      newPane.querySelectorAll('input').forEach(input => { input.disabled = mode !== 'new'; });
+    };
+    form.querySelectorAll('input[name="account_mode"]').forEach(radio => radio.addEventListener('change', () => setMode(form.elements.account_mode.value)));
+    setMode('existing');
+    const resultsBox = node.querySelector('[data-owner-results]');
+    const pickedBox = node.querySelector('[data-owner-picked]');
+    const applyPick = account => {
+      picked.account = account || null;
+      form.elements.owner_user_id.value = account?.user_id || '';
+      form.elements.owner_email.value = account?.email || '';
+      form.elements.owner_display_name.value = account?.display_name || '';
+      form.elements.owner_login_id.value = account?.login_id || '';
+      if (account && !form.elements.phone.value.trim() && account.phone) form.elements.phone.value = account.phone;
+      if (account && !form.elements.contact_name.value.trim() && account.display_name) form.elements.contact_name.value = account.display_name;
+      pickedBox.hidden = !account;
+      if (account) node.querySelector('[data-owner-picked-label]').textContent = `${account.display_name || '-'} · ${account.phone || account.email || ''}${account.login_id ? ` · ${account.login_id}` : ' · ยังไม่มี Login ID'}`;
+    };
+    node.querySelector('[data-owner-clear]').onclick = () => { applyPick(null); resultsBox.textContent = 'ยังไม่ได้ค้นหา'; form.elements.owner_search.value = ''; };
+    let searchTimer = null;
+    form.elements.owner_search.addEventListener('input', () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(async () => {
+        const query = form.elements.owner_search.value;
+        if (String(query || '').trim().length < 2) { resultsBox.textContent = 'พิมพ์อย่างน้อย 2 ตัวอักษรเพื่อค้นหา'; return; }
+        resultsBox.textContent = 'กำลังค้นหา…';
+        try {
+          const rows = await searchOwnerAccounts(query);
+          if (!rows.length) { resultsBox.textContent = 'ไม่พบบัญชีที่ตรง ลองคำค้นอื่น หรือสลับไปสร้างบัญชีใหม่'; return; }
+          resultsBox.innerHTML = '';
+          rows.forEach(row => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'mpa-button mpa-button-secondary';
+            button.style.cssText = 'text-align:left;justify-content:flex-start';
+            button.textContent = `${row.display_name || '-'} · ${row.phone || row.email || ''}${row.login_id ? ` · ${row.login_id}` : ' · ยังไม่มี Login ID'}`;
+            button.onclick = () => { applyPick(row); resultsBox.innerHTML = ''; resultsBox.textContent = `เลือก ${row.display_name || row.email} แล้ว ข้อมูลถูกดึงลงฟอร์มแล้ว`; };
+            resultsBox.append(button);
+          });
+        } catch (error) { resultsBox.textContent = error.message || 'ค้นหาบัญชีไม่สำเร็จ'; }
+      }, 300);
+    });
+    return node;
+  };
   const enhanceStores = () => {
     const host = document.getElementById('stores'); if (!host) return;
     const create = document.getElementById('createStore');

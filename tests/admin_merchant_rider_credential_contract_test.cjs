@@ -16,4 +16,13 @@ assert.match(source, /admin\.auth\.admin\.updateUserById\(rider\.user_id, \{ pas
 assert.match(source, /action: 'rider_password_reset', after_state: \{ rider_id: entityId \}/, 'Rider password reset audit must contain only the entity ID, never the password');
 assert.match(source, /action: 'store_password_reset', after_state: \{ store_id: entityId \}/, 'Merchant password reset audit must contain only the entity ID, never the password');
 
+assert.match(source, /owner_user_id/, 'Provision must support attaching an existing user account as store owner');
+assert.match(source, /action: 'store_owner_attached'/, 'Attaching an existing owner must write a dedicated audit event');
+assert.match(source, /หนึ่งบัญชีผูกได้หนึ่งร้าน/, 'Attach must refuse accounts that already own a store (merchant login binds one store)');
+assert.match(source, /บัญชีนี้ยังไม่มี Login ID/, 'Attach must require a Login ID only when the account lacks one');
+assert.match(storeUi, /name="account_mode"/, 'Store create form must let admin choose existing account or new account');
+assert.match(storeUi, /owner_user_id/, 'Store create form must submit the picked owner account id');
+assert.match(storeUi, /ค้นหาบัญชี/, 'Store create form must offer account search for prefilling owner data');
+assert.match(storeUi, /ใช้รหัสผ่านเดิมของบัญชี/, 'Existing-account mode must keep the original password (no reset)');
+
 console.log('admin merchant/rider credential contract: PASS');
