@@ -139,8 +139,11 @@
       form.elements.owner_email.value = account?.email || '';
       form.elements.owner_display_name.value = account?.display_name || '';
       form.elements.owner_login_id.value = account?.login_id || '';
-      if (account && !form.elements.phone.value.trim() && account.phone) form.elements.phone.value = account.phone;
-      if (account && !form.elements.contact_name.value.trim() && account.display_name) form.elements.contact_name.value = account.display_name;
+      if (account) {
+        if (account.phone) form.elements.phone.value = account.phone;
+        if (account.display_name) form.elements.contact_name.value = account.display_name;
+        if (account.email) form.elements.contact_email.value = account.email;
+      }
       pickedBox.hidden = !account;
       if (account) node.querySelector('[data-owner-picked-label]').textContent = `${account.display_name || '-'} · ${account.phone || account.email || ''}${account.login_id ? ` · ${account.login_id}` : ' · ยังไม่มี Login ID'}`;
     };
