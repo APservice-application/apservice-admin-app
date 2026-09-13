@@ -239,15 +239,74 @@
   }
 
   async function callStoreForOrder(order) {
-    if (!order?.store_id) return notice('ออเดอร์นี้ไม่มีข้อมูลร้านค้า', 'error');
+    if (!order?.store_id) { notice('ออเดอร์นี้ไม่มีข้อมูลร้านค้า', 'error'); return false; }
     try {
       const rows = await request(`stores?select=id,name,phone&id=eq.${encodeURIComponent(order.store_id)}&limit=1`);
       const store = rows?.[0] || {};
       const phone = String(store.phone || '').trim();
       await audit('admin_order_store_called', order.customer_id || null, `โทรหาร้าน ${store.name || order.store_name || ''} เพื่อยืนยันออเดอร์ ${order.id}`, { order_id: order.id, store_id: order.store_id }, { phone: phone || 'ไม่มีเบอร์ในระบบ' });
-      if (!phone) return notice('ร้านนี้ยังไม่มีเบอร์โทรในระบบ กรุณาติดต่อผ่านช่องทางอื่น', 'error');
+      if (!phone) { notice('ร้านนี้ยังไม่มีเบอร์โทรในระบบ กรุณาติดต่อผ่านช่องทางอื่น', 'error'); return false; }
       window.location.href = `tel:${phone.replace(/[^+0-9]/g, '')}`;
-    } catch (error) { notice(`โทรหาร้านค้าไม่สำเร็จ: ${error.message}`, 'error'); }
+      return true;
+    } catch (error) { notice(`โทรหาร้านค้าไม่สำเร็จ: ${error.message}`, 'error'); return false; }
+  }
+
+  const workflowCalledOrders = new Set();
+  const workflowReviewedOrders = new Set();
+
+  function resolveForwardStatus(order) {
+    const C = canonicalStatuses();
+    const can = runtime()?.C?.order?.canTransition;
+    if (!C || typeof can !== 'function') return null;
+    const targets = Object.values(C).filter(status => status && status !== C.CANCELLED
+      && can({ from: order.status, to: status, actor: 'admin' }).ok);
+    return targets.length === 1 ? targets[0] : null;
+  }
+
+  function openReleaseWorkflow(order, onSaved) {
+    const C = canonicalStatuses();
+    if (!releasableToStore(order)) return notice('ออเดอร์นี้ไม่ได้อยู่ในคิวรอแอดมินตรวจสอบ', 'error');
+    const target = resolveForwardStatus(order);
+    const stepsHost = document.createElement('div');
+    const dialog = modal(`จัดการด่วน · ${order.id}`, `<p class="mpa-muted">ทำตามขั้นทีละข้อ ระบบจะพาไปจนปล่อยออเดอร์โดยไม่ต้องเลือกสถานะเอง${target ? ` (ปลายทาง: ${esc(target)})` : ''}</p><div data-workflow-steps></div><div class="admin-modal-actions"><button type="button" class="mpa-button mpa-button-secondary" data-close>ปิด</button></div>`, 'จัดการด่วนปล่อยออเดอร์');
+    dialog.backdrop.querySelector('[data-workflow-steps]').replaceWith(stepsHost);
+    const render = () => {
+      const called = workflowCalledOrders.has(order.id);
+      const reviewed = workflowReviewedOrders.has(order.id);
+      const stepState = done => done ? '<b style="color:#0B8C7C">✓ เสร็จ</b>' : '<b style="color:#B26A00">○ รอทำ</b>';
+      stepsHost.innerHTML = `<ol class="mpa-muted" style="margin:0 0 4px;padding-left:20px;display:grid;gap:12px">`
+        + `<li><div>ขั้น 1 โทรหาร้านค้า ${stepState(called)}</div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px"><button type="button" class="mpa-button mpa-button-secondary" data-wf-call>โทรหาร้านค้า</button><button type="button" class="mpa-button mpa-button-secondary" data-wf-called>ติดต่อร้านเรียบร้อยแล้ว</button></div></li>`
+        + `<li><div>ขั้น 2 ตรวจสินค้า ${stepState(reviewed)}</div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px"><button type="button" class="mpa-button mpa-button-secondary" data-wf-edit ${called ? '' : 'disabled'}>แก้ไขรายการ</button><button type="button" class="mpa-button mpa-button-secondary" data-wf-reviewed ${called ? '' : 'disabled'}>สินค้าครบแล้ว</button></div>${called ? '' : '<small>โทรหาร้านค้าก่อนจึงตรวจสินค้าได้</small>'}</li>`
+        + `<li><div>ขั้น 3 ปล่อยออเดอร์ ${target && called && reviewed ? stepState(false) : ''}</div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">${target ? `<button type="button" class="mpa-button" data-wf-release ${called && reviewed ? '' : 'disabled'}>เปลี่ยนสถานะเลย</button>` : '<small>ออเดอร์นี้มีทางไปต่อมากกว่าหนึ่งแบบ กรุณาใช้ปุ่มเปลี่ยนสถานะแบบเดิม</small>'}</div>${called && reviewed ? '' : '<small>ทำขั้น 1–2 ให้ครบก่อนจึงปล่อยได้</small>'}</li></ol>`;
+      stepsHost.querySelector('[data-wf-call]').onclick = async event => {
+        const button = event.currentTarget; button.disabled = true;
+        try { if (await callStoreForOrder(order)) { workflowCalledOrders.add(order.id); render(); } }
+        finally { button.disabled = false; }
+      };
+      stepsHost.querySelector('[data-wf-called]').onclick = async event => {
+        const button = event.currentTarget; button.disabled = true;
+        try {
+          await audit('admin_order_store_called', order.customer_id || null, `ยืนยันว่าติดต่อร้าน ${order.store_name || ''} เรียบร้อยแล้ว (จัดการด่วน)`, { order_id: order.id, store_id: order.store_id }, { channel: 'manual-confirm' });
+          workflowCalledOrders.add(order.id); notice('บันทึกว่าติดต่อร้านค้าแล้ว'); render();
+        } catch (error) { notice(`บันทึกไม่สำเร็จ: ${error.message}`, 'error'); button.disabled = false; }
+      };
+      const editButton = stepsHost.querySelector('[data-wf-edit]');
+      if (editButton) editButton.onclick = () => orderItemEditor(order, () => render());
+      const reviewedButton = stepsHost.querySelector('[data-wf-reviewed]');
+      if (reviewedButton) reviewedButton.onclick = () => { workflowReviewedOrders.add(order.id); render(); };
+      const releaseButton = stepsHost.querySelector('[data-wf-release]');
+      if (releaseButton) releaseButton.onclick = async () => {
+        releaseButton.disabled = true;
+        try {
+          const reason = `โทรยืนยันร้านค้าและตรวจสินค้าครบแล้ว ปล่อยผ่านจัดการด่วน`;
+          await manageOrder(order, 'status', { status: target }, reason);
+          await audit('admin_order_released_to_store', order.customer_id || null, reason, { order_id: order.id, status: order.status }, { order_id: order.id, status: target });
+          workflowCalledOrders.delete(order.id); workflowReviewedOrders.delete(order.id);
+          notice('ปล่อยออเดอร์ให้ร้านค้าแล้ว'); dialog.close(); onSaved();
+        } catch (error) { releaseButton.disabled = false; notice(`ปล่อยออเดอร์ไม่สำเร็จ: ${error.message}`, 'error'); }
+      };
+    };
+    render();
   }
 
   function ordersPatch() {
@@ -268,10 +327,11 @@
       const load = async () => { host.innerHTML = M.ui.loading('กำลังโหลดข้อมูลออเดอร์…'); const result = await Promise.all([request('delivery_orders?select=id,customer_id,customer_name,store_id,store_name,rider_id,rider_name,ride_selected_rider_id,status,total,payable,delivery_fee,credit_used,payment_method,dispatch_status,assigned_at,estimated_arrival_at,eta_source,dispatch_note,dispatch_updated_at,ordered_at,updated_at&order=ordered_at.desc&limit=500'), request('mobile_notifications?select=id,status,created_at&status=in.(pending,failed)&order=created_at.desc&limit=100').catch(() => [])]); rows = result[0] || []; notificationCount = (result[1] || []).length; render(); };
       const dispatchLabel = row => ({ unassigned: 'ยังไม่มอบหมาย', assigned: 'มอบหมายแล้ว', en_route: 'กำลังไปจุดรับ', arrived_pickup: 'ถึงจุดรับแล้ว', picked_up: 'รับสินค้าแล้ว', delivering: 'กำลังไปส่ง', delivered: 'ส่งสำเร็จ', exception: 'มีเหตุขัดข้อง' }[row.dispatch_status] || (row.rider_id ? 'มอบหมายแล้ว' : 'ยังไม่มอบหมาย'));
       const openOrderDetail = async row => {
+        const workflowButton = releasableToStore(row) ? `<button class="mpa-button" data-detail-workflow>จัดการด่วน</button>` : '';
         const releaseButtons = releasableToStore(row)
           ? `<button class="mpa-button mpa-button-secondary" data-detail-call>โทรหาร้านค้า</button><button class="mpa-button" data-detail-release>ปล่อยออเดอร์ให้ร้านค้า</button>`
           : `<button class="mpa-button mpa-button-secondary" data-detail-call>โทรหาร้านค้า</button>`;
-        const detail = modal(`รายละเอียดออเดอร์ · ${row.id}`, `<div class="admin-order-detail-summary"><span class="mpa-badge">${esc(statusText(row))}</span><span class="admin-order-work-state admin-order-work-${esc(workState(row).key)}"><b aria-hidden="true">${esc(workState(row).icon)}</b>${esc(workState(row).label)}</span><p class="mpa-muted">สั่งเมื่อ ${row.ordered_at ? esc(new Date(row.ordered_at).toLocaleString('th-TH')) : '-'}</p></div><dl class="admin-order-detail-grid"><div><dt>เลขออเดอร์</dt><dd>${esc(row.id)}</dd></div><div><dt>ลูกค้า</dt><dd>${esc(row.customer_name || '-')}</dd></div><div><dt>ร้านค้า</dt><dd>${esc(row.store_name || '-')}</dd></div><div><dt>ผู้รับงาน</dt><dd>${row.rider_name ? `🛵 ${esc(row.rider_name)}` : 'ยังไม่มีผู้รับงาน'}</dd></div><div><dt>การจัดส่ง</dt><dd>${esc(dispatchLabel(row))}</dd></div><div><dt>ที่อยู่จัดส่ง</dt><dd>${esc(row.delivery_address || '-')}</dd></div><div><dt>วิธีชำระเงิน</dt><dd>${esc(row.payment_method || 'ไม่ระบุ')}</dd></div><div><dt>สถานะการชำระเงิน</dt><dd>${esc(row.payment_status || (row.payment_confirmed_at ? 'ยืนยันแล้ว' : 'ยังไม่ยืนยัน'))}</dd></div><div><dt>ยอดสินค้า</dt><dd>${money(row.total)}</dd></div><div><dt>ค่าจัดส่ง</dt><dd>${money(row.delivery_fee)}</dd></div><div><dt>เครดิตที่ใช้</dt><dd>${money(row.credit_used)}</dd></div><div><dt>ยอดชำระ</dt><dd><strong>${money(row.payable ?? row.total)}</strong></dd></div><div><dt>เวลาถึงโดยประมาณ</dt><dd>${row.estimated_arrival_at ? esc(new Date(row.estimated_arrival_at).toLocaleString('th-TH')) : 'ยังไม่กำหนด'}</dd></div><div><dt>อัปเดตล่าสุด</dt><dd>${row.updated_at ? esc(new Date(row.updated_at).toLocaleString('th-TH')) : '-'}</dd></div></dl><section class="admin-order-detail-items"><h3>รายการสินค้า</h3><div data-order-items>${M.ui.loading('กำลังอ่านรายการสินค้า…')}</div></section><section class="admin-order-detail-notes"><h3>หมายเหตุและการปฏิบัติงาน</h3><p>${esc(row.delivery_note || row.dispatch_note || row.notes || 'ไม่มีหมายเหตุ')}</p></section><div class="admin-order-detail-actions">${releaseButtons}<button class="mpa-button" data-detail-status>เปลี่ยนสถานะ</button><button class="mpa-button mpa-button-secondary" data-detail-core>แก้ข้อมูลหลัก</button><button class="mpa-button mpa-button-secondary" data-detail-edit>แก้รายการสินค้า</button><button class="mpa-button mpa-button-secondary" data-detail-assign>เปลี่ยนผู้รับงาน</button><button class="mpa-button mpa-button-secondary" data-detail-dispatch>แก้การจัดส่งและเวลาถึง</button><button class="mpa-button mpa-button-secondary" data-detail-history>ดูประวัติออเดอร์</button></div>`, `รายละเอียดออเดอร์ ${row.id}`);
+        const detail = modal(`รายละเอียดออเดอร์ · ${row.id}`, `<div class="admin-order-detail-summary"><span class="mpa-badge">${esc(statusText(row))}</span><span class="admin-order-work-state admin-order-work-${esc(workState(row).key)}"><b aria-hidden="true">${esc(workState(row).icon)}</b>${esc(workState(row).label)}</span><p class="mpa-muted">สั่งเมื่อ ${row.ordered_at ? esc(new Date(row.ordered_at).toLocaleString('th-TH')) : '-'}</p></div><dl class="admin-order-detail-grid"><div><dt>เลขออเดอร์</dt><dd>${esc(row.id)}</dd></div><div><dt>ลูกค้า</dt><dd>${esc(row.customer_name || '-')}</dd></div><div><dt>ร้านค้า</dt><dd>${esc(row.store_name || '-')}</dd></div><div><dt>ผู้รับงาน</dt><dd>${row.rider_name ? `🛵 ${esc(row.rider_name)}` : 'ยังไม่มีผู้รับงาน'}</dd></div><div><dt>การจัดส่ง</dt><dd>${esc(dispatchLabel(row))}</dd></div><div><dt>ที่อยู่จัดส่ง</dt><dd>${esc(row.delivery_address || '-')}</dd></div><div><dt>วิธีชำระเงิน</dt><dd>${esc(row.payment_method || 'ไม่ระบุ')}</dd></div><div><dt>สถานะการชำระเงิน</dt><dd>${esc(row.payment_status || (row.payment_confirmed_at ? 'ยืนยันแล้ว' : 'ยังไม่ยืนยัน'))}</dd></div><div><dt>ยอดสินค้า</dt><dd>${money(row.total)}</dd></div><div><dt>ค่าจัดส่ง</dt><dd>${money(row.delivery_fee)}</dd></div><div><dt>เครดิตที่ใช้</dt><dd>${money(row.credit_used)}</dd></div><div><dt>ยอดชำระ</dt><dd><strong>${money(row.payable ?? row.total)}</strong></dd></div><div><dt>เวลาถึงโดยประมาณ</dt><dd>${row.estimated_arrival_at ? esc(new Date(row.estimated_arrival_at).toLocaleString('th-TH')) : 'ยังไม่กำหนด'}</dd></div><div><dt>อัปเดตล่าสุด</dt><dd>${row.updated_at ? esc(new Date(row.updated_at).toLocaleString('th-TH')) : '-'}</dd></div></dl><section class="admin-order-detail-items"><h3>รายการสินค้า</h3><div data-order-items>${M.ui.loading('กำลังอ่านรายการสินค้า…')}</div></section><section class="admin-order-detail-notes"><h3>หมายเหตุและการปฏิบัติงาน</h3><p>${esc(row.delivery_note || row.dispatch_note || row.notes || 'ไม่มีหมายเหตุ')}</p></section><div class="admin-order-detail-actions">${workflowButton}${releaseButtons}<button class="mpa-button" data-detail-status>เปลี่ยนสถานะ</button><button class="mpa-button mpa-button-secondary" data-detail-core>แก้ข้อมูลหลัก</button><button class="mpa-button mpa-button-secondary" data-detail-edit>แก้รายการสินค้า</button><button class="mpa-button mpa-button-secondary" data-detail-assign>เปลี่ยนผู้รับงาน</button><button class="mpa-button mpa-button-secondary" data-detail-dispatch>แก้การจัดส่งและเวลาถึง</button><button class="mpa-button mpa-button-secondary" data-detail-history>ดูประวัติออเดอร์</button></div>`, `รายละเอียดออเดอร์ ${row.id}`);
         const itemsHost = detail.backdrop.querySelector('[data-order-items]');
         try {
           const items = await request(`delivery_order_items?select=id,name,emoji,unit_price,quantity,options&order_id=eq.${encodeURIComponent(row.id)}&order=id.asc&limit=100`);
@@ -287,6 +347,8 @@
         detail.backdrop.querySelector('[data-detail-call]').onclick = () => { void callStoreForOrder(row); };
         const releaseButton = detail.backdrop.querySelector('[data-detail-release]');
         if (releaseButton) releaseButton.onclick = () => run(releaseOrderToStore);
+        const workflowEntry = detail.backdrop.querySelector('[data-detail-workflow]');
+        if (workflowEntry) workflowEntry.onclick = () => run(openReleaseWorkflow);
       };
       const renderCard = row => { const work = workState(row); return `<article class="admin-order-row admin-order-row-${work.key}"><div class="admin-order-row-main"><span class="admin-order-row-id">${esc(row.id)}</span><strong>${esc(row.store_name || '-')}</strong><span>${esc(row.customer_name || '-')}</span><time>${row.ordered_at ? esc(new Date(row.ordered_at).toLocaleString('th-TH')) : '-'}</time></div><div class="admin-order-row-meta"><span class="admin-order-work-state admin-order-work-${work.key}" title="${esc(work.label)}"><b aria-hidden="true">${work.icon}</b>${esc(work.label)}</span><span class="mpa-badge">${esc(statusText(row))}</span><strong>${money(row.payable ?? row.total)}</strong><button class="mpa-button mpa-button-secondary" type="button" data-detail-order="${esc(row.id)}">ดูรายละเอียด</button></div></article>`; };
       const bindCards = filtered => filtered.forEach(row => document.querySelector(`[data-detail-order="${CSS.escape(row.id)}"]`)?.addEventListener('click', () => openOrderDetail(row)));

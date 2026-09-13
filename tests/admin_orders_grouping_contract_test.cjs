@@ -38,4 +38,14 @@ assert.match(controlPlane, /window\.location\.href = `tel:/, 'ปุ่มโท
 assert.match(controlPlane, /มอบหมายไรเดอร์ไม่ได้/, 'ต้องห้ามมอบหมายไรเดอร์ก่อนแอดมินปล่อยออเดอร์');
 assert.match(controlPlane, /ยังไม่ผ่านการตรวจและปล่อยจากแอดมิน/, 'ข้อความกันมอบหมายไรเดอร์ต้องสื่อว่ายังไม่ผ่านการตรวจ');
 
+assert.match(controlPlane, /data-detail-workflow/, 'รายละเอียดออเดอร์ต้องมีปุ่มจัดการด่วน');
+assert.match(controlPlane, /function openReleaseWorkflow\(order, onSaved\)/, 'ต้องมีขั้นตอนจัดการด่วนแบบอัตโนมัติ');
+assert.match(controlPlane, /function resolveForwardStatus\(order\)/, 'จัดการด่วนต้องหาสถานะถัดไปเองโดยไม่ให้แอดมินเลือก');
+assert.match(controlPlane, /workflowCalledOrders/, 'จัดการด่วนต้องจำได้ว่าโทรหาร้านค้าแล้ว');
+assert.match(controlPlane, /workflowReviewedOrders/, 'จัดการด่วนต้องจำได้ว่าตรวจสินค้าแล้ว');
+assert.match(controlPlane, /ติดต่อร้านเรียบร้อยแล้ว/, 'จัดการด่วนต้องมีวิธียืนยันว่าติดต่อร้านแล้ว');
+assert.match(controlPlane, /สินค้าครบแล้ว/, 'จัดการด่วนต้องมีปุ่มยืนยันสินค้าครบ');
+assert.match(controlPlane, /เปลี่ยนสถานะเลย/, 'จัดการด่วนต้องปล่อยออเดอร์ได้ด้วยปุ่มเดียว');
+assert.match(controlPlane, /ปล่อยผ่านจัดการด่วน/, 'การปล่อยผ่านจัดการด่วนต้องบันทึกเหตุผลอัตโนมัติ');
+
 console.log('admin orders grouping contract: PASS');
