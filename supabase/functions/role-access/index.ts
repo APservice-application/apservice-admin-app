@@ -649,6 +649,95 @@ Deno.serve(async (request) => {
       return json({ ok: true, entity_id: entityId })
     }
 
+    const requireOwnStore = async (): Promise<{ storeId?: string; error?: string }> => {
+      const { data: roleRow } = await admin.from('user_roles').select('role').eq('user_id', caller.id).eq('role', 'store_owner').maybeSingle()
+      if (!roleRow) return { error: 'เฉพาะบัญชีเจ้าของร้านเท่านั้นที่จัดการร้านของตนเองได้' }
+      const { data: accountControl } = await admin.from('account_controls').select('status,suspension_reason').eq('user_id', caller.id).maybeSingle()
+      if (accountControl?.status === 'suspended') return { error: `บัญชีร้านค้าถูกระงับ${accountControl.suspension_reason ? `: ${accountControl.suspension_reason}` : ''}` }
+      const { data: store, error } = await admin.from('stores').select('id').eq('owner_id', caller.id).maybeSingle()
+      if (error) return { error: error.message }
+      if (!store) return { error: 'ไม่พบร้านค้าที่ผูกกับบัญชีนี้ กรุณาติดต่อผู้ดูแลระบบ' }
+      return { storeId: String(store.id) }
+    }
+    const resolveOwnMenuCategory = async (storeId: string, raw: unknown) => {
+      const id = text(raw)
+      if (!id) return null
+      const { data: category } = await admin.from('menu_categories').select('id,store_id').eq('id', id).maybeSingle()
+      if (!category || (category.store_id && category.store_id !== storeId)) return null
+      return id
+    }
+
+    if (body.action === 'merchant_menu_list') {
+      const own = await requireOwnStore()
+      if (!own.storeId) return json({ error: own.error }, 403)
+      const [items, archived, categories] = await Promise.all([
+        admin.from('menu_items').select('id,name,emoji,description,price,stock,available,promo,image_url,category_id,updated_at').eq('store_id', own.storeId).is('archived_at', null).order('name', { ascending: true }).limit(1000),
+        admin.from('menu_items').select('id,name,emoji,description,price,stock,available,promo,image_url,category_id,archived_at,archived_reason').eq('store_id', own.storeId).not('archived_at', 'is', null).order('archived_at', { ascending: false }).limit(500),
+        admin.from('menu_categories').select('id,name,icon,sort_order,active').eq('store_id', own.storeId).order('sort_order', { ascending: true }).limit(200),
+      ])
+      if (items.error) return json({ error: items.error.message }, 400)
+      return json({ ok: true, items: items.data || [], archived: archived.data || [], categories: categories.data || [] })
+    }
+
+    if (body.action === 'merchant_menu_write') {
+      const own = await requireOwnStore()
+      if (!own.storeId) return json({ error: own.error }, 403)
+      const storeId = own.storeId, op = text(body.op), now = new Date().toISOString()
+      const item = (body.item && typeof body.item === 'object' ? body.item : {}) as Record<string, unknown>
+      if (!['insert', 'update'].includes(op)) return json({ error: 'คำสั่งเมนูไม่ถูกต้อง' }, 400)
+      if (op === 'insert') {
+        const id = text(item.id).slice(0, 80) || `menu-${crypto.randomUUID()}`
+        const name = text(item.name).slice(0, 120)
+        if (!name) return json({ error: 'กรุณาระบุชื่อเมนู' }, 400)
+        const price = Number(item.price), stock = Number(item.stock)
+        if (!Number.isFinite(price) || price < 0 || price > 1000000) return json({ error: 'ราคาเมนูไม่ถูกต้อง' }, 400)
+        if (!Number.isFinite(stock) || stock < 0 || stock > 1000000) return json({ error: 'สต็อกเมนูไม่ถูกต้อง' }, 400)
+        const { data: duplicate } = await admin.from('menu_items').select('id').eq('id', id).maybeSingle()
+        if (duplicate) return json({ error: 'รหัสเมนูนี้ถูกใช้งานแล้ว กรุณาลองใหม่' }, 409)
+        const { error } = await admin.from('menu_items').insert({ id, store_id: storeId, name, emoji: text(item.emoji).slice(0, 16) || '🍜', description: text(item.description).slice(0, 800), price, stock, available: item.available === true && stock > 0, promo: item.promo === true, category_id: await resolveOwnMenuCategory(storeId, item.category_id), image_url: text(item.image_url).slice(0, 1000) || null, updated_at: now })
+        if (error) return json({ error: error.message }, 400)
+        return json({ ok: true, id })
+      }
+      const itemId = text(body.item_id || item.id)
+      if (!itemId) return json({ error: 'กรุณาระบุเมนูที่ต้องการแก้ไข' }, 400)
+      const { data: existing, error: existingError } = await admin.from('menu_items').select('id,store_id').eq('id', itemId).maybeSingle()
+      if (existingError) return json({ error: existingError.message }, 400)
+      if (!existing || existing.store_id !== storeId) return json({ error: 'ไม่พบเมนูของร้านนี้' }, 404)
+      const updates: Record<string, unknown> = { updated_at: now }
+      const has = (key: string) => Object.prototype.hasOwnProperty.call(item, key)
+      if (has('name')) { const name = text(item.name).slice(0, 120); if (!name) return json({ error: 'ชื่อเมนูห้ามว่าง' }, 400); updates.name = name }
+      if (has('emoji')) updates.emoji = text(item.emoji).slice(0, 16) || '🍜'
+      if (has('description')) updates.description = text(item.description).slice(0, 800)
+      if (has('price')) { const price = Number(item.price); if (!Number.isFinite(price) || price < 0 || price > 1000000) return json({ error: 'ราคาเมนูไม่ถูกต้อง' }, 400); updates.price = price }
+      if (has('stock')) { const stock = Number(item.stock); if (!Number.isFinite(stock) || stock < 0 || stock > 1000000) return json({ error: 'สต็อกเมนูไม่ถูกต้อง' }, 400); updates.stock = stock }
+      if (has('available')) updates.available = item.available === true
+      if (has('promo')) updates.promo = item.promo === true
+      if (has('image_url')) updates.image_url = text(item.image_url).slice(0, 1000) || null
+      if (has('category_id')) updates.category_id = await resolveOwnMenuCategory(storeId, item.category_id)
+      if (Object.keys(updates).length === 1) return json({ error: 'ไม่พบข้อมูลเมนูที่แก้ไข' }, 400)
+      const { error } = await admin.from('menu_items').update(updates).eq('id', itemId)
+      if (error) return json({ error: error.message }, 400)
+      return json({ ok: true, id: itemId })
+    }
+
+    if (body.action === 'merchant_update_store') {
+      const own = await requireOwnStore()
+      if (!own.storeId) return json({ error: own.error }, 403)
+      const input = (body.data && typeof body.data === 'object' ? body.data : {}) as Record<string, unknown>
+      const has = (key: string) => Object.prototype.hasOwnProperty.call(input, key)
+      const updates: Record<string, unknown> = { updated_at: new Date().toISOString() }
+      if (has('name')) { const name = text(input.name).slice(0, 160); if (!name) return json({ error: 'ชื่อร้านห้ามว่าง' }, 400); updates.name = name }
+      if (has('description')) updates.description = text(input.description).slice(0, 2000)
+      if (has('phone')) updates.phone = text(input.phone).slice(0, 40)
+      if (has('eta')) updates.eta = text(input.eta).slice(0, 60)
+      if (has('image_url')) updates.image_url = text(input.image_url).slice(0, 1000)
+      if (has('background_url')) updates.background_url = text(input.background_url).slice(0, 1000)
+      if (Object.keys(updates).length === 1) return json({ error: 'ไม่พบข้อมูลร้านที่แก้ไข' }, 400)
+      const { error } = await admin.from('stores').update(updates).eq('id', own.storeId)
+      if (error) return json({ error: error.message }, 400)
+      return json({ ok: true, store_id: own.storeId })
+    }
+
     if (body.action === 'resolve_order_cancellation') {
       const requestId = text(body.request_id)
       const decision = text(body.decision)

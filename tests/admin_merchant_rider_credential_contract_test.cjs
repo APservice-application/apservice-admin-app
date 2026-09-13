@@ -29,6 +29,13 @@ assert.match(source, /registered_address: text\(entity\.registered_address\) \|\
 assert.match(source, /resolveCategoryId/, 'Provision must validate category_id against store_categories instead of trusting form input');
 assert.match(storeUi, /select name="category_id"/, 'Store create form must offer categories as a dropdown, not free text');
 assert.match(storeUi, /store_categories\?select=id,name,icon/, 'Category dropdown must load real categories from the server');
+assert.match(source, /body\.action === 'merchant_menu_write'/, 'Edge must expose merchant menu self-management');
+assert.match(source, /body\.action === 'merchant_update_store'/, 'Edge must expose merchant store self-management');
+assert.match(source, /requireOwnStore/, 'Merchant actions must verify store ownership server-side');
+assert.match(source, /body\.action === 'merchant_menu_list'/, 'Edge must expose owner-scoped menu listing');
+assert.match(source, /from\('menu_categories'\)\.select\('id,name,icon,sort_order,active'\)/, 'Menu listing must read real store categories');
+assert.match(source, /\.is\('archived_at', null\)/, 'Menu listing must exclude archived items from the active list');
+assert.match(source, /\.not\('archived_at', 'is', null\)/, 'Menu listing must return archived items separately for restore');
 assert.match(storeUi, /datalist id="owner-account-list"/, 'Owner picker must offer a dropdown of existing accounts');
 assert.match(storeUi, /user_profiles\?select=user_id,display_name,email,phone,login_id&order=created_at\.desc&limit=200/, 'Owner dropdown must preload recent accounts for one-tap picking');
 assert.match(storeUi, /stores\?select=owner_id/, 'Owner dropdown must exclude accounts that already own a store');
