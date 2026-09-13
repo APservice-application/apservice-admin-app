@@ -168,7 +168,7 @@ Deno.serve(async (request) => {
       const { data: owned } = await admin.from('stores').select('id').eq('owner_id', appRow.user_id).maybeSingle()
       if (owned) return json({ error: 'บัญชีนี้มีร้านอยู่แล้ว' }, 409)
       const storeId = `store-${crypto.randomUUID().slice(0, 8)}`
-      const { error: storeError } = await admin.from('stores').insert({ id: storeId, owner_id: appRow.user_id, owner_email: appRow.email, name: appRow.store_name, phone: appRow.phone, active: true, moderation_status: 'active', registered_address: appRow.address })
+      const { error: storeError } = await admin.from('stores').insert({ id: storeId, owner_id: appRow.user_id, owner_email: appRow.email, name: appRow.store_name, phone: appRow.phone, active: false, moderation_status: 'active', registered_address: appRow.address, pickup_address: appRow.address })
       if (storeError) return json({ error: storeError.message }, 400)
       await admin.from('merchant_applications').update({ status: 'approved', admin_note: note, store_id: storeId, reviewed_by: caller.id, reviewed_at: new Date().toISOString() }).eq('id', appId)
       await admin.from('admin_action_audit').insert({ actor_id: caller.id, target_user_id: appRow.user_id, action: 'merchant_application_approved', after_state: { application_id: appId, store_id: storeId } })
@@ -378,6 +378,7 @@ Deno.serve(async (request) => {
       if (has('description')) updates.description = text(input.description).slice(0, 2000)
       if (has('phone')) updates.phone = text(input.phone).slice(0, 40)
       if (has('eta')) updates.eta = text(input.eta).slice(0, 60)
+      if (has('pickup_address')) updates.pickup_address = text(input.pickup_address).slice(0, 800)
       if (has('image_url')) updates.image_url = text(input.image_url).slice(0, 1000)
       if (has('background_url')) updates.background_url = text(input.background_url).slice(0, 1000)
       if (has('payout_method')) { const m = text(input.payout_method); if (!['bank', 'qr', 'cash', 'other'].includes(m)) return json({ error: 'วิธีรับเงินไม่ถูกต้อง' }, 400); updates.payout_method = m }
@@ -388,7 +389,8 @@ Deno.serve(async (request) => {
       if (Object.keys(updates).length === 1) return json({ error: 'ไม่พบข้อมูลร้านที่แก้ไข' }, 400)
       const { error } = await admin.from('stores').update(updates).eq('id', own.storeId)
       if (error) return json({ error: error.message }, 400)
-      return json({ ok: true, store_id: own.storeId })
+      const { data: prof } = await admin.from('stores').select('profile_pct,profile_exempt,profile_missing').eq('id', own.storeId).single()
+      return json({ ok: true, store_id: own.storeId, profile_pct: prof?.profile_pct ?? 0, profile_exempt: prof?.profile_exempt === true, profile_missing: prof?.profile_missing || [] })
     }
 
     if (body.action === 'merchant_request_withdrawal') {
@@ -549,7 +551,7 @@ Deno.serve(async (request) => {
     }
 
     if (body.action === 'list_store_accounts') {
-      const { data: stores, error: storesError } = await admin.from('stores').select('id,owner_id,owner_email,name,emoji,description,rating,eta,phone,location,active,image_url,background_url,open_time,close_time,order_cutoff_minutes,emergency_closed,emergency_note,category_id,moderation_status,moderation_reason,moderation_changed_at').order('name', { ascending: true }).limit(500)
+      const { data: stores, error: storesError } = await admin.from('stores').select('id,owner_id,owner_email,name,emoji,description,rating,eta,phone,location,active,image_url,background_url,open_time,close_time,order_cutoff_minutes,emergency_closed,emergency_note,category_id,moderation_status,moderation_reason,moderation_changed_at,profile_pct,profile_exempt,profile_missing').order('name', { ascending: true }).limit(500)
       if (storesError) return json({ error: storesError.message }, 400)
       const ownerIds = (stores || []).map(store => store.owner_id).filter(Boolean)
       const { data: profiles, error: profilesError } = ownerIds.length ? await admin.from('user_profiles').select('user_id,email,login_id,phone').in('user_id', ownerIds) : { data: [], error: null }
@@ -577,7 +579,7 @@ Deno.serve(async (request) => {
       const entityId = text(body.entity_id)
       const section = text(body.section)
       const input = (body.data && typeof body.data === 'object' ? body.data : {}) as Record<string, unknown>
-      const allowedStoreSections = ['general', 'appearance', 'operations']
+      const allowedStoreSections = ['general', 'appearance', 'operations', 'onboarding']
       const legacyStoreSections = ['identity', 'addresses', 'documents']
       if (!entityId || ![...allowedStoreSections, ...legacyStoreSections].includes(section)) return json({ error: 'กรุณาระบุร้านค้าและหมวดข้อมูลที่ต้องการบันทึก' }, 400)
       const { data: existing, error: existingError } = await admin.from('stores').select('id,name').eq('id', entityId).maybeSingle()
@@ -635,8 +637,12 @@ Deno.serve(async (request) => {
         if (has('location')) updates.location = input.location || null
       }
 
+      if (section === 'onboarding') {
+        if (has('profile_exempt')) updates.profile_exempt = input.profile_exempt === true
+      }
+
       if (Object.keys(updates).length === 1) return json({ error: 'ไม่พบข้อมูลที่แก้ไขในหมวดนี้' }, 400)
-      const { data: updated, error: updateError } = await admin.from('stores').update(updates).eq('id', entityId).select('id,name,emoji,description,rating,eta,phone,location,image_url,background_url,open_time,close_time,order_cutoff_minutes,emergency_closed,emergency_note,category_id,legal_name,registration_number,contact_name,contact_email,registered_address,pickup_address,delivery_address,registration_document_url,active,moderation_status,moderation_reason,moderation_changed_at').single()
+      const { data: updated, error: updateError } = await admin.from('stores').update(updates).eq('id', entityId).select('id,name,emoji,description,rating,eta,phone,location,image_url,background_url,open_time,close_time,order_cutoff_minutes,emergency_closed,emergency_note,category_id,legal_name,registration_number,contact_name,contact_email,registered_address,pickup_address,delivery_address,registration_document_url,active,moderation_status,moderation_reason,moderation_changed_at,profile_pct,profile_exempt,profile_missing').single()
       if (updateError) return json({ error: updateError.message }, 400)
       return json({ ok: true, entity_id: entityId, section, store: updated })
     }
@@ -839,7 +845,7 @@ Deno.serve(async (request) => {
         const { error: roleError } = await admin.from('user_roles').upsert({ user_id: ownerUserId, role: 'store_owner' }, { onConflict: 'user_id,role' })
         if (roleError) return json({ error: roleError.message }, 400)
         const categoryId = await resolveCategoryId(entity.category_id)
-        const store = { id: entityId, owner_id: ownerUserId, owner_email: email, name: storeName, phone: phone || text(profile.phone), active: entity.active !== false, moderation_status: text(entity.moderation_status, 'active'), legal_name: text(entity.legal_name) || '', registration_number: text(entity.registration_number) || '', contact_name: text(entity.contact_name) || '', contact_email: text(entity.contact_email) || '', registered_address: text(entity.registered_address) || '', pickup_address: text(entity.pickup_address) || '', delivery_address: text(entity.delivery_address) || '', category_id: categoryId, location: entity.location || null, updated_at: new Date().toISOString() }
+        const store = { id: entityId, owner_id: ownerUserId, owner_email: email, name: storeName, phone: phone || text(profile.phone), active: entity.active !== false, moderation_status: text(entity.moderation_status, 'active'), profile_exempt: true, legal_name: text(entity.legal_name) || '', registration_number: text(entity.registration_number) || '', contact_name: text(entity.contact_name) || '', contact_email: text(entity.contact_email) || '', registered_address: text(entity.registered_address) || '', pickup_address: text(entity.pickup_address) || '', delivery_address: text(entity.delivery_address) || '', category_id: categoryId, location: entity.location || null, updated_at: new Date().toISOString() }
         const { error: storeError } = await admin.from('stores').insert(store)
         if (storeError) return json({ error: storeError.message }, 400)
         await admin.from('admin_action_audit').insert({ actor_id: caller.id, target_user_id: ownerUserId, action: 'store_owner_attached', after_state: { store_id: entityId, login_id: loginId, reused_account: true } })
@@ -861,7 +867,7 @@ Deno.serve(async (request) => {
         const { error: roleError } = await admin.from('user_roles').insert({ user_id: userId, role: 'store_owner' })
         if (roleError) throw roleError
         const categoryId = await resolveCategoryId(entity.category_id)
-        const store = { id: entityId, owner_id: userId, owner_email: email, name: storeName, phone, active: entity.active !== false, moderation_status: text(entity.moderation_status, 'active'), legal_name: text(entity.legal_name) || '', registration_number: text(entity.registration_number) || '', contact_name: text(entity.contact_name) || '', contact_email: text(entity.contact_email) || '', registered_address: text(entity.registered_address) || '', pickup_address: text(entity.pickup_address) || '', delivery_address: text(entity.delivery_address) || '', category_id: categoryId, location: entity.location || null, updated_at: new Date().toISOString() }
+        const store = { id: entityId, owner_id: userId, owner_email: email, name: storeName, phone, active: entity.active !== false, moderation_status: text(entity.moderation_status, 'active'), profile_exempt: true, legal_name: text(entity.legal_name) || '', registration_number: text(entity.registration_number) || '', contact_name: text(entity.contact_name) || '', contact_email: text(entity.contact_email) || '', registered_address: text(entity.registered_address) || '', pickup_address: text(entity.pickup_address) || '', delivery_address: text(entity.delivery_address) || '', category_id: categoryId, location: entity.location || null, updated_at: new Date().toISOString() }
         const { error: storeError } = await admin.from('stores').insert(store)
         if (storeError) throw storeError
         await admin.from('admin_action_audit').insert({ actor_id: caller.id, target_user_id: userId, action: 'store_owner_provisioned', after_state: { store_id: entityId, login_id: loginId } })
@@ -1109,7 +1115,9 @@ Deno.serve(async (request) => {
       const { error: riderError } = await admin.from('riders').upsert({ id: entityId, user_id: userId, name: rider.name.trim(), emoji: rider.emoji || '🛵', phone: rider.phone || '', vehicle: rider.vehicle || 'มอเตอร์ไซค์', status: rider.status || 'พร้อมรับงาน', last_location: rider.lastLocation || null }, { onConflict: 'id' }); if (riderError) return json({ error: riderError.message }, 400)
     } else {
       const store = entity as StoreEntity; if (!store.name?.trim()) return json({ error: 'กรุณาระบุชื่อร้านค้า' }, 400)
+      const isNewStore = !entityResult.data
       const { error: storeError } = await admin.from('stores').upsert({ id: entityId, owner_id: userId, name: store.name.trim(), emoji: store.emoji || '🍽️', description: store.desc || '', rating: Number(store.rating || 0), eta: store.eta || '', phone: store.phone || phone, location: store.location || null, active: store.active !== false, legal_name: text(store.legal_name).slice(0, 160), registration_number: text(store.registration_number).slice(0, 120), contact_name: text(store.contact_name).slice(0, 160), contact_email: normalizedId(store.contact_email), registered_address: text(store.registered_address).slice(0, 800), pickup_address: text(store.pickup_address).slice(0, 800), delivery_address: text(store.delivery_address).slice(0, 800), registration_document_url: text(store.registration_document_url), category_id: text(store.category_id) || null }, { onConflict: 'id' }); if (storeError) return json({ error: storeError.message }, 400)
+      if (isNewStore) await admin.from('stores').update({ profile_exempt: true }).eq('id', entityId)
     }
     return json({ ok: true, user_id: userId, email, login_id: loginId, entity_id: entityId, role })
   } catch (error) { return json({ error: error instanceof Error ? error.message : 'Unexpected error' }, 500) }

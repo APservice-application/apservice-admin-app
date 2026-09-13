@@ -6,7 +6,7 @@ assert.match(app, /merchant_applications\?select=/, 'ต้องอ่านค
 assert.match(app, /admin_review_merchant_application/, 'ต้องพิจารณาผ่าน edge');
 assert.match(app, /data-app-approve/, 'ต้องมีปุ่มอนุมัติ');
 assert.match(app, /data-app-reject/, 'ต้องมีปุ่มปฏิเสธ');
-assert.match(app, /ADMIN_APP_BUILD = '2026\.09\.13\.05'/, 'ต้อง bump build');
+assert.match(app, /ADMIN_APP_BUILD = '2026\.09\.13\.06'/, 'ต้อง bump build');
 
 const edge = fs.readFileSync('supabase/functions/role-access/index.ts', 'utf8');
 assert.match(edge, /body\.action === 'merchant_apply'/, 'edge ต้องมี merchant_apply');
