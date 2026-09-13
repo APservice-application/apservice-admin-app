@@ -5,7 +5,7 @@ const source = fs.readFileSync('admin/admin-app.js', 'utf8');
 const operations = fs.readFileSync('admin/operations.html', 'utf8');
 
 assert.match(source, /\['content','เนื้อหาเดิม','promotions\.html'\]/, 'legacy content link must point to canonical Promotions');
-assert.match(source, /\['admins','ผู้ใช้และบทบาท','accounts\.html'\]/, 'legacy admins link must point to canonical Accounts');
+assert.match(source, /\['accounts','บัญชีทุกบทบาท','account'\]/, 'accounts must live in the primary people group instead of legacy links');
 assert.match(source, /page === 'operations' && \(feature === 'content' \|\| feature === 'admins'\)/, 'direct legacy content/admin routes must be handled');
 assert.match(source, /new URLSearchParams\(params\)/, 'legacy redirect must clone the original query parameters');
 assert.match(source, /forward\.delete\('feature'\)/, 'legacy redirect must remove only the legacy feature marker');
