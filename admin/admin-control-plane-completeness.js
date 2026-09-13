@@ -95,7 +95,7 @@
           <label style="display:flex;gap:6px;align-items:center"><input type="radio" name="account_mode" value="new"> สร้างบัญชีใหม่</label>
         </div></div>
         <div data-owner-existing>
-          <div class="admin-form-grid"><label class="mpa-field admin-form-full">ค้นหาบัญชี (ชื่อ / เบอร์ / อีเมล / Login ID)<input name="owner_search" type="search" placeholder="พิมพ์อย่างน้อย 2 ตัวอักษร แล้วเลือกจากรายการ" autocomplete="off"></label></div>
+          <div class="admin-form-grid"><label class="mpa-field admin-form-full">เลือกบัญชีเจ้าของร้าน (กดลูกศรเพื่อดูรายการ หรือพิมพ์ค้นหา)<input name="owner_search" type="search" list="owner-account-list" placeholder="เลือกจาก 200 บัญชีล่าสุด หรือพิมพ์ชื่อ/เบอร์/อีเมล" autocomplete="off"><datalist id="owner-account-list"></datalist></label></div>
           <div data-owner-results class="mpa-muted" style="display:grid;gap:6px;margin:0 0 10px">ยังไม่ได้ค้นหา</div>
           <div data-owner-picked hidden style="margin:0 0 10px"><span class="mpa-muted">เลือกแล้ว: </span><b data-owner-picked-label></b> <button type="button" class="mpa-button mpa-button-secondary" data-owner-clear>เปลี่ยนบัญชี</button></div>
           <div class="admin-form-grid">${field('owner_email', 'อีเมลเข้าสู่ระบบของบัญชี (เดิม)', '', 'email', 'readonly aria-readonly="true"')}${field('owner_login_id', 'Login ID Merchant (ถ้าบัญชียังไม่มี ต้องกำหนด)')}${field('owner_display_name', 'ชื่อเจ้าของร้าน / Merchant', '', 'text', 'required')}</div>
@@ -157,8 +157,23 @@
       if (account) node.querySelector('[data-owner-picked-label]').textContent = `${account.display_name || '-'} · ${account.phone || account.email || ''}${account.login_id ? ` · ${account.login_id}` : ' · ยังไม่มี Login ID'}`;
     };
     node.querySelector('[data-owner-clear]').onclick = () => { applyPick(null); resultsBox.textContent = 'ยังไม่ได้ค้นหา'; form.elements.owner_search.value = ''; };
+    const accountList = node.querySelector('#owner-account-list');
+    const recentByLabel = new Map();
+    runtime().M.request('user_profiles?select=user_id,display_name,email,phone,login_id&order=created_at.desc&limit=200', { private: true, cacheTtlMs: 30_000, cacheKey: 'admin-store-create:recent-accounts' }).then(rows => {
+      (rows || []).forEach(row => {
+        const label = `${row.display_name || '-'} · ${row.phone || row.email || ''}${row.login_id ? ` · ${row.login_id}` : ''}`;
+        if (recentByLabel.has(label)) return;
+        recentByLabel.set(label, row);
+        const option = document.createElement('option');
+        option.value = label;
+        accountList.append(option);
+      });
+      if (!recentByLabel.size) resultsBox.textContent = 'ยังไม่มีบัญชีในระบบ ให้เจ้าของสมัครบัญชีก่อน แล้วค่อยกลับมาเลือก';
+    }).catch(() => { resultsBox.textContent = 'โหลดรายการบัญชีไม่สำเร็จ แต่ยังพิมพ์ค้นหาได้'; });
     let searchTimer = null;
     form.elements.owner_search.addEventListener('input', () => {
+      const matched = recentByLabel.get(form.elements.owner_search.value);
+      if (matched) { clearTimeout(searchTimer); applyPick(matched); resultsBox.textContent = `เลือก ${matched.display_name || matched.email} แล้ว ข้อมูลถูกดึงลงฟอร์มแล้ว`; return; }
       clearTimeout(searchTimer);
       searchTimer = setTimeout(async () => {
         const query = form.elements.owner_search.value;

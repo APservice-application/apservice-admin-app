@@ -29,5 +29,7 @@ assert.match(source, /registered_address: text\(entity\.registered_address\) \|\
 assert.match(source, /resolveCategoryId/, 'Provision must validate category_id against store_categories instead of trusting form input');
 assert.match(storeUi, /select name="category_id"/, 'Store create form must offer categories as a dropdown, not free text');
 assert.match(storeUi, /store_categories\?select=id,name,icon/, 'Category dropdown must load real categories from the server');
+assert.match(storeUi, /datalist id="owner-account-list"/, 'Owner picker must offer a dropdown of existing accounts');
+assert.match(storeUi, /user_profiles\?select=user_id,display_name,email,phone,login_id&order=created_at\.desc&limit=200/, 'Owner dropdown must preload recent accounts for one-tap picking');
 
 console.log('admin merchant/rider credential contract: PASS');
