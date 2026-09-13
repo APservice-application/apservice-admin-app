@@ -315,6 +315,11 @@ Deno.serve(async (request) => {
       if (has('eta')) updates.eta = text(input.eta).slice(0, 60)
       if (has('image_url')) updates.image_url = text(input.image_url).slice(0, 1000)
       if (has('background_url')) updates.background_url = text(input.background_url).slice(0, 1000)
+      if (has('payout_method')) { const m = text(input.payout_method); if (!['bank', 'qr', 'cash', 'other'].includes(m)) return json({ error: 'วิธีรับเงินไม่ถูกต้อง' }, 400); updates.payout_method = m }
+      if (has('payout_bank_name')) updates.payout_bank_name = text(input.payout_bank_name).slice(0, 120)
+      if (has('payout_account_name')) updates.payout_account_name = text(input.payout_account_name).slice(0, 160)
+      if (has('payout_account_number')) { const n = text(input.payout_account_number).replace(/[\s-]/g, ''); if (n && !/^[0-9]{9,20}$/.test(n)) return json({ error: 'เลขบัญชี/พร้อมเพย์ต้องเป็นตัวเลข 9-20 หลัก' }, 400); updates.payout_account_number = n }
+      if (has('payout_qr_url')) updates.payout_qr_url = text(input.payout_qr_url).slice(0, 1000)
       if (Object.keys(updates).length === 1) return json({ error: 'ไม่พบข้อมูลร้านที่แก้ไข' }, 400)
       const { error } = await admin.from('stores').update(updates).eq('id', own.storeId)
       if (error) return json({ error: error.message }, 400)
