@@ -198,8 +198,6 @@ body:has([data-admin-modal-backdrop]) [role="dialog"] {
     flex-basis: 100%;
   }
   .mpa-toast {
-    right: 10px;
-    bottom: calc(12px + env(safe-area-inset-bottom));
     width: calc(100vw - 20px);
   }
 }
