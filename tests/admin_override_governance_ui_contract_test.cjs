@@ -8,10 +8,12 @@ const orders = fs.readFileSync('admin/admin-control-plane-patch.js', 'utf8');
 const payment = fs.readFileSync('admin/admin-checkout-group-payment.js', 'utf8');
 const auditHtml = fs.readFileSync('admin/audit-log.html', 'utf8');
 
-for (const token of ['MIN_REASON = 3', 'uploadPrivateImage', "bucket: 'admin-override-evidence'", 'collect(root, id, summary)', 'ยืนยันดำเนินการทันทีหรือไม่?', 'enhanceAccountModal', 'form.requestSubmit()']) assert.ok(override.includes(token), `missing reusable override token: ${token}`);
+for (const token of ['MIN_REASON = 3', 'uploadPrivateImage', "bucket: 'admin-override-evidence'", 'collect(root, id, summary)', 'ยืนยันดำเนินการทันทีหรือไม่?', 'enhanceAccountModal', 'form.requestSubmit()', "adminOverrideReason = 'account'"]) assert.ok(override.includes(token), `missing reusable override token: ${token}`);
 for (const token of ['admin_list_override_audit', 'createSignedImageUrl', 'data-audit-evidence']) assert.ok(audit.includes(token), `missing audit log token: ${token}`);
 for (const token of ["['audit-log','Audit Log','legacy']", "'audit-log': () => window.APServiceAdminAuditLog?.mount?.() || login()"] ) assert.ok(runtime.includes(token), `missing audit route token: ${token}`);
 for (const token of ["override().fields('order-items'", "override().fields('cancellation'", "override().fields('rider-assignment'", "override().fields('order-status'", 'evidence_path: evidencePath || \'\'']) assert.ok(orders.includes(token), `missing order governance token: ${token}`);
 for (const token of ["APServiceAdminOverride.collect", 'p_evidence_path: governance.evidencePath || null']) assert.ok(payment.includes(token), `missing payment governance token: ${token}`);
 assert.ok(auditHtml.includes('admin-audit-log.js') && auditHtml.includes('admin-override-governance.js'), 'audit page must load governance dependencies');
+assert.ok(runtime.includes('<textarea name="reason" data-admin-override-reason="account"'), 'ช่องเหตุผลฝั่งบัญชีต้องมีป้ายให้ตัวเก็บเหตุผลมองเห็น');
+assert.ok(runtime.includes("adminOverrideReady !== 'true'"), 'ต้องไม่ถามยืนยันซ้ำเมื่อตรวจเหตุผลแล้ว');
 console.log('Admin override governance UI contract passed');

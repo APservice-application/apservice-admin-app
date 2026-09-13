@@ -42,7 +42,7 @@
     const reason = form.querySelector('[name="reason"]');
     if (!reason) return;
     form.dataset.adminOverrideEnhanced = 'true';
-    reason.required = true; reason.minLength = MIN_REASON; reason.placeholder = 'ระบุสาเหตุและสิ่งที่ตรวจสอบแล้วอย่างน้อย 3 ตัวอักษร';
+    reason.required = true; reason.minLength = MIN_REASON; reason.dataset.adminOverrideReason = 'account'; reason.placeholder = 'ระบุสาเหตุและสิ่งที่ตรวจสอบแล้วอย่างน้อย 3 ตัวอักษร';
     const host = reason.closest('label') || reason.parentElement;
     if (!form.querySelector('[data-admin-override-evidence="account"]')) host?.insertAdjacentHTML('afterend', fields('account', { label: 'หลักฐานประกอบ (ไม่บังคับ)', financial: /กระเป๋าเงิน/.test(heading) }));
     const input = form.querySelector('[data-admin-override-evidence="account"]');
