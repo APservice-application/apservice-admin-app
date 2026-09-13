@@ -3,7 +3,7 @@
   const M = window.APServiceMPA;
   if (!M) return;
   const esc = value => M.ui.escapeHtml(String(value ?? ''));
-  const MIN_REASON = 10;
+  const MIN_REASON = 3;
 
   const fields = (id, { label = 'เหตุผลการดำเนินการ', placeholder = 'อธิบายสาเหตุและสิ่งที่ตรวจสอบแล้ว', evidenceHint = 'แนบรูปหลักฐานได้ (ไม่บังคับ, JPG/PNG/WebP ไม่เกิน 1 MB)', financial = false } = {}) => `<label class="mpa-field"><span>${esc(label)} <b aria-hidden="true">*</b></span><textarea data-admin-override-reason="${esc(id)}" rows="3" minlength="${MIN_REASON}" maxlength="500" required placeholder="${esc(placeholder)}"></textarea><small class="mpa-muted">อย่างน้อย ${MIN_REASON} ตัวอักษร · ระบบบันทึกพร้อมชื่อและเวลาของ Admin</small></label><label class="mpa-field"><span>หลักฐานรูปภาพ ${financial ? '<b class="mpa-badge">แนะนำสำหรับรายการเงิน</b>' : '<small>(ไม่บังคับ)</small>'}</span><input data-admin-override-evidence="${esc(id)}" type="file" accept="image/jpeg,image/png,image/webp"><span class="mpa-media-preview" data-admin-override-preview="${esc(id)}" hidden><img alt="ตัวอย่างรูปหลักฐานที่เลือก"><small data-admin-override-preview-status></small></span><small class="mpa-muted">${esc(evidenceHint)}</small><output data-admin-override-evidence-status="${esc(id)}" class="mpa-muted"></output></label>`;
 
@@ -42,7 +42,7 @@
     const reason = form.querySelector('[name="reason"]');
     if (!reason) return;
     form.dataset.adminOverrideEnhanced = 'true';
-    reason.required = true; reason.minLength = MIN_REASON; reason.placeholder = 'ระบุสาเหตุและสิ่งที่ตรวจสอบแล้วอย่างน้อย 10 ตัวอักษร';
+    reason.required = true; reason.minLength = MIN_REASON; reason.placeholder = 'ระบุสาเหตุและสิ่งที่ตรวจสอบแล้วอย่างน้อย 3 ตัวอักษร';
     const host = reason.closest('label') || reason.parentElement;
     if (!form.querySelector('[data-admin-override-evidence="account"]')) host?.insertAdjacentHTML('afterend', fields('account', { label: 'หลักฐานประกอบ (ไม่บังคับ)', financial: /กระเป๋าเงิน/.test(heading) }));
     const input = form.querySelector('[data-admin-override-evidence="account"]');
