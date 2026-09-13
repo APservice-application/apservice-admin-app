@@ -200,6 +200,8 @@ Deno.serve(async (request) => {
         const { data: claimed, error: claimError } = await admin.from('delivery_orders').update({ rider_id: rider.id, rider_name: text(input.rider_name) || text(rider.name), status: ORDER_STATUS.RIDER_PICKUP, dispatch_status: 'assigned', assigned_at: now, updated_at: now }).eq('id', orderId).is('rider_id', null).select('id,rider_id,rider_name,status,workflow_state,dispatch_status,proof_image,delivery_started_at,completed_at,updated_at').maybeSingle()
         if (claimError) return json({ error: claimError.message }, 400)
         if (!claimed) return json({ error: 'งานนี้ถูกรับหรือเปลี่ยนสถานะโดยไรเดอร์คนอื่นแล้ว' }, 409)
+        const { error: claimEventError } = await admin.from('order_status_events').insert({ order_id: orderId, status: ORDER_STATUS.RIDER_PICKUP, actor_id: caller.id, actor_label: 'Rider', created_at: now })
+        if (claimEventError) return json({ error: `รับงานสำเร็จแต่บันทึกประวัติไม่สำเร็จ: ${claimEventError.message}` }, 400)
         return json({ ok: true, operation, order: claimed })
       }
 
