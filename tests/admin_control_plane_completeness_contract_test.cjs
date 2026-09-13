@@ -47,4 +47,6 @@ if (roleAccess && migration) {
 console.log('admin control plane completeness contract: PASS');
 assert.match(admin, /const ADMIN_APP_BUILD = '\d{4}\.\d{2}\.\d{2}\.\d{2}'/, 'ต้องมีเลขเวอร์ชันแอดมินกลางให้เทียบแคช');
 assert.match(admin, /window\.APServiceAdminBuild = ADMIN_APP_BUILD/, 'เลขเวอร์ชันต้องอ่านได้จากภายนอก');
-assert.match(admin, /เวอร์ชันแอดมิน \$\{ADMIN_APP_BUILD\}/, 'หน้า Login และ Dashboard ต้องแสดงเลขเวอร์ชันให้เห็น');
+assert.match(admin, /เวอร์ชันแอดมิน \$\{ADMIN_APP_BUILD\}|admin-build-badge/, 'ต้องมีป้ายเวอร์ชันให้เห็นชัด');
+assert.match(admin, /AP Service<\/b>.*admin-build-badge/, 'ป้ายเวอร์ชันต้องอยู่ข้างชื่อ AP Service ในแถบบน');
+assert.match(admin, /AP Service<\/strong>.*admin-build-badge/, 'หน้า Login ต้องมีป้ายเวอร์ชันข้างชื่อแอป');
