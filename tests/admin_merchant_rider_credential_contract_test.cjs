@@ -26,5 +26,8 @@ assert.match(storeUi, /ค้นหาบัญชี/, 'Store create form must 
 assert.match(storeUi, /ใช้รหัสผ่านเดิมของบัญชี/, 'Existing-account mode must keep the original password (no reset)');
 assert.doesNotMatch(source, /text\(entity\.(legal_name|registration_number|contact_name|contact_email|registered_address|pickup_address|delivery_address)\) \|\| null/, 'Store insert must never send NULL into NOT NULL DEFAULT columns (partial save must work)');
 assert.match(source, /registered_address: text\(entity\.registered_address\) \|\| ''/, 'Empty store addresses must fall back to empty string so stores can open before data is complete');
+assert.match(source, /resolveCategoryId/, 'Provision must validate category_id against store_categories instead of trusting form input');
+assert.match(storeUi, /select name="category_id"/, 'Store create form must offer categories as a dropdown, not free text');
+assert.match(storeUi, /store_categories\?select=id,name,icon/, 'Category dropdown must load real categories from the server');
 
 console.log('admin merchant/rider credential contract: PASS');

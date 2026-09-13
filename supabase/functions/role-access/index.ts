@@ -555,6 +555,12 @@ Deno.serve(async (request) => {
     if (body.action === 'provision_store_owner') {
       const entity = body.entity && typeof body.entity === 'object' ? body.entity as Record<string, unknown> : {}
       const entityId = text(body.entity_id || entity.id), storeName = text(entity.name)
+      const resolveCategoryId = async (raw: unknown) => {
+        const id = text(raw)
+        if (!id) return null
+        const { data } = await admin.from('store_categories').select('id').eq('id', id).maybeSingle()
+        return data ? id : null
+      }
       const ownerUserId = text(body.owner_user_id)
       if (ownerUserId) {
         const displayName = text(body.display_name), loginIdInput = normalizedId(body.login_id), phone = text(body.phone || entity.phone)
@@ -591,7 +597,8 @@ Deno.serve(async (request) => {
         if (Object.keys(profileUpdates).length) { const { error: updateError } = await admin.from('user_profiles').update(profileUpdates).eq('user_id', ownerUserId); if (updateError) return json({ error: updateError.message }, 400) }
         const { error: roleError } = await admin.from('user_roles').upsert({ user_id: ownerUserId, role: 'store_owner' }, { onConflict: 'user_id,role' })
         if (roleError) return json({ error: roleError.message }, 400)
-        const store = { id: entityId, owner_id: ownerUserId, owner_email: email, name: storeName, phone: phone || text(profile.phone), active: entity.active !== false, moderation_status: text(entity.moderation_status, 'active'), legal_name: text(entity.legal_name) || '', registration_number: text(entity.registration_number) || '', contact_name: text(entity.contact_name) || '', contact_email: text(entity.contact_email) || '', registered_address: text(entity.registered_address) || '', pickup_address: text(entity.pickup_address) || '', delivery_address: text(entity.delivery_address) || '', category_id: text(entity.category_id) || null, location: entity.location || null, updated_at: new Date().toISOString() }
+        const categoryId = await resolveCategoryId(entity.category_id)
+        const store = { id: entityId, owner_id: ownerUserId, owner_email: email, name: storeName, phone: phone || text(profile.phone), active: entity.active !== false, moderation_status: text(entity.moderation_status, 'active'), legal_name: text(entity.legal_name) || '', registration_number: text(entity.registration_number) || '', contact_name: text(entity.contact_name) || '', contact_email: text(entity.contact_email) || '', registered_address: text(entity.registered_address) || '', pickup_address: text(entity.pickup_address) || '', delivery_address: text(entity.delivery_address) || '', category_id: categoryId, location: entity.location || null, updated_at: new Date().toISOString() }
         const { error: storeError } = await admin.from('stores').insert(store)
         if (storeError) return json({ error: storeError.message }, 400)
         await admin.from('admin_action_audit').insert({ actor_id: caller.id, target_user_id: ownerUserId, action: 'store_owner_attached', after_state: { store_id: entityId, login_id: loginId, reused_account: true } })
@@ -612,7 +619,8 @@ Deno.serve(async (request) => {
         if (profileError) throw profileError
         const { error: roleError } = await admin.from('user_roles').insert({ user_id: userId, role: 'store_owner' })
         if (roleError) throw roleError
-        const store = { id: entityId, owner_id: userId, owner_email: email, name: storeName, phone, active: entity.active !== false, moderation_status: text(entity.moderation_status, 'active'), legal_name: text(entity.legal_name) || '', registration_number: text(entity.registration_number) || '', contact_name: text(entity.contact_name) || '', contact_email: text(entity.contact_email) || '', registered_address: text(entity.registered_address) || '', pickup_address: text(entity.pickup_address) || '', delivery_address: text(entity.delivery_address) || '', category_id: text(entity.category_id) || null, location: entity.location || null, updated_at: new Date().toISOString() }
+        const categoryId = await resolveCategoryId(entity.category_id)
+        const store = { id: entityId, owner_id: userId, owner_email: email, name: storeName, phone, active: entity.active !== false, moderation_status: text(entity.moderation_status, 'active'), legal_name: text(entity.legal_name) || '', registration_number: text(entity.registration_number) || '', contact_name: text(entity.contact_name) || '', contact_email: text(entity.contact_email) || '', registered_address: text(entity.registered_address) || '', pickup_address: text(entity.pickup_address) || '', delivery_address: text(entity.delivery_address) || '', category_id: categoryId, location: entity.location || null, updated_at: new Date().toISOString() }
         const { error: storeError } = await admin.from('stores').insert(store)
         if (storeError) throw storeError
         await admin.from('admin_action_audit').insert({ actor_id: caller.id, target_user_id: userId, action: 'store_owner_provisioned', after_state: { store_id: entityId, login_id: loginId } })

@@ -87,7 +87,7 @@
   };
   const openFullStoreCreate = () => {
     const picked = { account: null };
-    const storeFields = `<div class="admin-form-grid">${field('name', 'ชื่อร้านสำหรับแสดงลูกค้า', '', 'text', 'required')}${field('legal_name', 'ชื่อจดทะเบียน / ชื่อธุรกิจ')}${field('registration_number', 'เลขทะเบียน / เลขประจำตัวผู้เสียภาษี')}${field('category_id', 'ประเภทร้านสำหรับหน้าลูกค้า')}${field('phone', 'เบอร์โทรศัพท์ร้าน', '', 'tel', 'required')}${field('contact_name', 'ชื่อผู้ติดต่อหลัก')}${field('contact_email', 'อีเมลติดต่อร้าน', '', 'email')}${field('registered_address', 'ที่อยู่จดทะเบียน', '', 'textarea')}${field('pickup_address', 'ที่อยู่จุดรับสินค้า / สาขาปฏิบัติการ', '', 'textarea')}${field('delivery_address', 'ที่อยู่รับเอกสาร / ที่อยู่จัดส่ง', '', 'textarea')}${field('location_lat', 'ละติจูดหมุดร้าน', '', 'number', 'step="any"')}${field('location_lng', 'ลองจิจูดหมุดร้าน', '', 'number', 'step="any"')}</div>`;
+    const storeFields = `<div class="admin-form-grid">${field('name', 'ชื่อร้านสำหรับแสดงลูกค้า', '', 'text', 'required')}${field('legal_name', 'ชื่อจดทะเบียน / ชื่อธุรกิจ')}${field('registration_number', 'เลขทะเบียน / เลขประจำตัวผู้เสียภาษี')}<label class="mpa-field">ประเภทร้านสำหรับหน้าลูกค้า<select name="category_id" data-category-select><option value="">ยังไม่ระบุ (ไว้กรอกทีหลัง)</option></select></label>${field('phone', 'เบอร์โทรศัพท์ร้าน', '', 'tel', 'required')}${field('contact_name', 'ชื่อผู้ติดต่อหลัก')}${field('contact_email', 'อีเมลติดต่อร้าน', '', 'email')}${field('registered_address', 'ที่อยู่จดทะเบียน', '', 'textarea')}${field('pickup_address', 'ที่อยู่จุดรับสินค้า / สาขาปฏิบัติการ', '', 'textarea')}${field('delivery_address', 'ที่อยู่รับเอกสาร / ที่อยู่จัดส่ง', '', 'textarea')}${field('location_lat', 'ละติจูดหมุดร้าน', '', 'number', 'step="any"')}${field('location_lng', 'ลองจิจูดหมุดร้าน', '', 'number', 'step="any"')}</div>`;
     const node = modal('เพิ่มร้านค้าและบัญชี Merchant', 'เลือกบัญชีที่มีอยู่แล้วเพื่อดึงข้อมูลมาเปิดร้าน หรือสร้างบัญชีใหม่ ชื่อร้านกับชื่อเจ้าของแยกกันอิสระ', `
       <div class="admin-form-section"><h3>บัญชีเจ้าของร้าน</h3>
         <div class="mpa-field admin-form-full"><span>ที่มาของบัญชี</span><div style="display:flex;gap:12px;flex-wrap:wrap">
@@ -131,6 +131,15 @@
     };
     form.querySelectorAll('input[name="account_mode"]').forEach(radio => radio.addEventListener('change', () => setMode(form.elements.account_mode.value)));
     setMode('existing');
+    runtime().M.request('store_categories?select=id,name,icon&active=eq.true&order=sort_order.asc', { private: true, cacheTtlMs: 30_000, cacheKey: 'admin-store-create:categories' }).then(rows => {
+      const select = node.querySelector('[data-category-select]');
+      (rows || []).forEach(row => {
+        const option = document.createElement('option');
+        option.value = row.id;
+        option.textContent = `${row.icon ? `${row.icon} ` : ''}${row.name || row.id}`;
+        select.append(option);
+      });
+    }).catch(() => { /* หมวดเลือกทีหลังได้ ห้ามบล็อกการเปิดร้าน */ });
     const resultsBox = node.querySelector('[data-owner-results]');
     const pickedBox = node.querySelector('[data-owner-picked]');
     const applyPick = account => {
