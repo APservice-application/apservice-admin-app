@@ -34,3 +34,20 @@
   .admin-order-item { grid-template-columns: 22px minmax(0, 1fr); }
   .admin-order-item > b { grid-column: 2; }
 }
+
+/* Mobile comfort (orders-v5): stack row meta, wrap detail summary, fit history table. */
+@media(max-width:760px){
+.admin-order-row{gap:10px;padding:12px}
+.admin-order-row-main{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+.admin-order-row-main>*:nth-child(4){grid-column:1/-1}
+.admin-order-row-meta{flex-wrap:wrap;row-gap:8px;white-space:normal}
+.admin-order-row-meta .mpa-button{flex:1 1 100%;min-height:42px}
+.admin-order-detail-summary{flex-wrap:wrap;row-gap:8px}
+.admin-order-detail-summary p{flex:1 1 100%;margin:0}
+.mpa-modal .mpa-page-head{flex-wrap:wrap;row-gap:8px}
+.mpa-modal .mpa-page-head h2{flex:1 1 220px;min-width:0;font-size:17px;overflow-wrap:anywhere}
+.mpa-modal .mpa-page-head [data-close]{flex:0 0 auto}
+.admin-orders-workflow-tabs .admin-order-search{order:4;flex:0 0 min(72vw,260px);width:auto;margin:0}
+#orderHistoryBody .mpa-table th,#orderHistoryBody .mpa-table td{min-width:0;font-size:11px;padding:8px}
+#orderHistoryBody .mpa-table{min-width:0;width:100%}
+}
