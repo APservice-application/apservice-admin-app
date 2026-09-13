@@ -604,7 +604,7 @@ Deno.serve(async (request) => {
       const reason = text(body.reason)
       const refundDecision = text(body.refund_decision, 'no_refund')
       const idempotencyKey = text(body.idempotency_key)
-      if (!requestId || !['approve', 'reject'].includes(decision) || reason.length < 10 || !idempotencyKey) return json({ error: 'กรุณาระบุคำขอ ผลพิจารณา และเหตุผลอย่างน้อย 10 ตัวอักษรให้ครบถ้วน' }, 400)
+      if (!requestId || !['approve', 'reject'].includes(decision) || reason.length < 3 || !idempotencyKey) return json({ error: 'กรุณาระบุคำขอ ผลพิจารณา และเหตุผลอย่างน้อย 3 ตัวอักษรให้ครบถ้วน' }, 400)
       const { data, error } = await callerDb.rpc('admin_resolve_order_cancellation', { p_request_id: requestId, p_action: decision, p_resolution_reason: reason, p_refund_decision: refundDecision, p_idempotency_key: idempotencyKey, p_evidence_path: text(body.evidence_path) || null })
       if (error) return json({ error: error.message }, 400)
       return json({ ok: true, cancellation: data })
@@ -646,7 +646,7 @@ Deno.serve(async (request) => {
       const idempotencyKey = text(body.idempotency_key)
       const approvedAmount = body.approved_amount === null || body.approved_amount === undefined || body.approved_amount === '' ? null : Number(body.approved_amount)
       const paidAmount = body.paid_amount === null || body.paid_amount === undefined || body.paid_amount === '' ? null : Number(body.paid_amount)
-      if (!refundId || !['approve', 'reject', 'mark_paid'].includes(action) || reason.length < 10 || !idempotencyKey) return json({ error: 'กรุณาระบุคำขอคืนเงิน คำสั่ง เหตุผลอย่างน้อย 10 ตัวอักษร และรหัสยืนยันให้ครบถ้วน' }, 400)
+      if (!refundId || !['approve', 'reject', 'mark_paid'].includes(action) || reason.length < 3 || !idempotencyKey) return json({ error: 'กรุณาระบุคำขอคืนเงิน คำสั่ง เหตุผลอย่างน้อย 3 ตัวอักษร และรหัสยืนยันให้ครบถ้วน' }, 400)
       if (approvedAmount !== null && !Number.isFinite(approvedAmount)) return json({ error: 'ยอดอนุมัติคืนเงินไม่ถูกต้อง' }, 400)
       if (paidAmount !== null && !Number.isFinite(paidAmount)) return json({ error: 'ยอดโอนคืนไม่ถูกต้อง' }, 400)
       const { data, error } = await callerDb.rpc('admin_process_order_refund', {
@@ -670,7 +670,7 @@ Deno.serve(async (request) => {
       const evidencePath = text(body.evidence_path)
       const input = (body.data && typeof body.data === 'object' ? body.data : {}) as Record<string, unknown>
       if (!orderId || !['status', 'assign_rider', 'dispatch', 'items'].includes(operation)) return json({ error: 'กรุณาระบุออร์เดอร์และคำสั่งจัดการที่ถูกต้อง' }, 400)
-      if (reason.length < 10) return json({ error: 'กรุณาระบุเหตุผลการจัดการอย่างน้อย 10 ตัวอักษร' }, 400)
+      if (reason.length < 3) return json({ error: 'กรุณาระบุเหตุผลการจัดการอย่างน้อย 3 ตัวอักษร' }, 400)
       if (evidencePath && !evidencePath.startsWith(`admin-override-evidence/${caller.id}/override/`)) return json({ error: 'หลักฐานต้องเป็นไฟล์ private ของ Admin ผู้ดำเนินการเท่านั้น' }, 400)
       const idempotencyKey = text(body.idempotency_key)
       if (['assign_rider', 'dispatch'].includes(operation) && idempotencyKey.length < 12) return json({ error: 'รหัสยืนยัน Dispatch ไม่ถูกต้อง' }, 400)

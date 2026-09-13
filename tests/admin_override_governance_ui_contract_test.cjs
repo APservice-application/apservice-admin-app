@@ -7,6 +7,8 @@ const runtime = fs.readFileSync('admin/admin-app.js', 'utf8');
 const orders = fs.readFileSync('admin/admin-control-plane-patch.js', 'utf8');
 const payment = fs.readFileSync('admin/admin-checkout-group-payment.js', 'utf8');
 const auditHtml = fs.readFileSync('admin/audit-log.html', 'utf8');
+const completeness = fs.readFileSync('admin/admin-control-plane-completeness.js', 'utf8');
+const edge = fs.readFileSync('supabase/functions/role-access/index.ts', 'utf8');
 
 for (const token of ['MIN_REASON = 3', 'uploadPrivateImage', "bucket: 'admin-override-evidence'", 'collect(root, id, summary)', 'ยืนยันดำเนินการทันทีหรือไม่?', 'enhanceAccountModal', 'form.requestSubmit()', "adminOverrideReason = 'account'"]) assert.ok(override.includes(token), `missing reusable override token: ${token}`);
 for (const token of ['admin_list_override_audit', 'createSignedImageUrl', 'data-audit-evidence']) assert.ok(audit.includes(token), `missing audit log token: ${token}`);
@@ -16,4 +18,7 @@ for (const token of ["APServiceAdminOverride.collect", 'p_evidence_path: governa
 assert.ok(auditHtml.includes('admin-audit-log.js') && auditHtml.includes('admin-override-governance.js'), 'audit page must load governance dependencies');
 assert.ok(runtime.includes('<textarea name="reason" data-admin-override-reason="account"'), 'ช่องเหตุผลฝั่งบัญชีต้องมีป้ายให้ตัวเก็บเหตุผลมองเห็น');
 assert.ok(runtime.includes("adminOverrideReady !== 'true'"), 'ต้องไม่ถามยืนยันซ้ำเมื่อตรวจเหตุผลแล้ว');
+assert.ok(completeness.includes('reason.length < 3') && completeness.includes('minlength="3"'), 'ฟอร์มคืนเงินต้องใช้เกณฑ์เหตุผล 3 ตัวอักษรให้ตรง edge');
+assert.ok(!completeness.includes('อย่างน้อย 10'), 'ฟอร์มคืนเงินต้องไม่มีข้อความเกณฑ์ 10 ตัวอักษรเหลืออยู่');
+for (const token of ['เหตุผลอย่างน้อย 3 ตัวอักษรให้ครบถ้วน', 'เหตุผลอย่างน้อย 3 ตัวอักษร และรหัสยืนยันให้ครบถ้วน', 'กรุณาระบุเหตุผลการจัดการอย่างน้อย 3 ตัวอักษร']) assert.ok(edge.includes(token), `edge ต้องใช้เกณฑ์ 3 ตัวอักษรให้ตรง UI: ${token}`);
 console.log('Admin override governance UI contract passed');
