@@ -93,6 +93,9 @@ Deno.serve(async (request) => {
         if (entityResult.error || !entityResult.data) return json({ error: 'บัญชีนี้ยังไม่ได้ผูกกับข้อมูลการทำงาน โปรดติดต่อผู้ดูแล' }, 403)
         entityId = entityResult.data.id
       } else if (role === 'store_owner') {
+        const { data: appRow } = await admin.from('merchant_applications').select('status,admin_note').eq('user_id', profile.user_id).maybeSingle()
+        if (appRow?.status === 'pending') return json({ error: 'ใบสมัครร้านของคุณอยู่ระหว่างตรวจสอบ กรุณารอแอดมินอนุมัติ' }, 403)
+        if (appRow?.status === 'rejected') return json({ error: `ใบสมัครถูกปฏิเสธ${appRow.admin_note ? `: ${appRow.admin_note}` : ''} สามารถสมัครใหม่ได้` }, 403)
         const entityResult = await admin.from('stores').select('id').eq('owner_id', profile.user_id).maybeSingle()
         if (entityResult.error || !entityResult.data) return json({ error: 'บัญชีนี้ยังไม่ได้ผูกกับข้อมูลการทำงาน โปรดติดต่อผู้ดูแล' }, 403)
         entityId = entityResult.data.id
@@ -103,12 +106,74 @@ Deno.serve(async (request) => {
       return json({ session: signedIn.session, user: signedIn.user, role, entity_id: entityId, login_id: profile.login_id })
     }
 
+    if (body.action === 'merchant_apply') {
+      const storeName = text(body.store_name).slice(0, 160)
+      const ownerName = text(body.owner_name).slice(0, 160)
+      const phone = text(body.phone).replace(/[\s-]/g, '')
+      const email = normalizedId(body.email)
+      const loginId = normalizedId(body.login_id)
+      const password = String(body.password || '')
+      const address = text(body.address).slice(0, 500)
+      if (storeName.length < 2 || ownerName.length < 2) return json({ error: 'กรุณากรอกชื่อร้านและชื่อเจ้าของร้าน' }, 400)
+      if (!/^[0-9]{9,10}$/.test(phone)) return json({ error: 'เบอร์โทรต้องเป็นตัวเลข 9-10 หลัก' }, 400)
+      if (!looksLikeEmail(email)) return json({ error: 'รูปแบบอีเมลไม่ถูกต้อง' }, 400)
+      if (!loginIdIsValid(loginId)) return json({ error: 'Login ID ต้องเป็น a-z 0-9 . _ - ยาว 3-32 ตัว' }, 400)
+      if (!secureTemporaryPassword(password)) return json({ error: 'รหัสผ่านต้องยาว 12 ตัวขึ้นไป มีพิมพ์เล็ก พิมพ์ใหญ่ ตัวเลข และอักขระพิเศษ' }, 400)
+      const { data: existingApp } = await admin.from('merchant_applications').select('id,user_id,status').or(`email.eq.${email},login_id.eq.${loginId},phone.eq.${phone}`).maybeSingle()
+      if (existingApp?.status === 'pending') return json({ error: 'มีใบสมัครรอตรวจสอบอยู่แล้ว' }, 409)
+      if (existingApp?.status === 'approved') return json({ error: 'ข้อมูลนี้อนุมัติเป็นร้านค้าแล้ว กรุณาเข้าสู่ระบบ' }, 409)
+      if (existingApp?.status === 'rejected') {
+        const { error: pwError } = await admin.auth.admin.updateUserById(existingApp.user_id, { password })
+        if (pwError) return json({ error: pwError.message }, 400)
+        const { error: appError } = await admin.from('merchant_applications').update({ store_name: storeName, owner_name: ownerName, phone, email, login_id: loginId, address, status: 'pending', admin_note: '', submitted_at: new Date().toISOString() }).eq('id', existingApp.id)
+        if (appError) return json({ error: appError.message }, 400)
+        await admin.from('user_profiles').update({ login_id: loginId, display_name: ownerName, phone }).eq('user_id', existingApp.user_id)
+        return json({ ok: true, status: 'pending', resubmitted: true })
+      }
+      const { data: dup } = await admin.from('user_profiles').select('user_id').or(`email.eq.${email},login_id.eq.${loginId}`).maybeSingle()
+      if (dup) return json({ error: 'อีเมลหรือ Login ID นี้ถูกใช้งานแล้ว' }, 409)
+      const { data: created, error: createError } = await admin.auth.admin.createUser({ email, password, email_confirm: true, user_metadata: { login_id: loginId, app_role: 'store_owner', display_name: ownerName } })
+      if (createError || !created?.user) return json({ error: createError?.message || 'สร้างบัญชีไม่สำเร็จ' }, 400)
+      const userId = created.user.id
+      await admin.from('user_roles').upsert({ user_id: userId, role: 'store_owner' }, { onConflict: 'user_id,role' })
+      await admin.from('user_profiles').upsert({ user_id: userId, email, login_id: loginId, display_name: ownerName, phone }, { onConflict: 'user_id' })
+      const { error: appError } = await admin.from('merchant_applications').insert({ user_id: userId, store_name: storeName, owner_name: ownerName, phone, email, login_id: loginId, address, status: 'pending' })
+      if (appError) { await admin.auth.admin.deleteUser(userId); return json({ error: appError.message }, 400) }
+      return json({ ok: true, status: 'pending' })
+    }
+
     const accessToken = (request.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '')
     if (!accessToken) return json({ error: 'ต้องเข้าสู่ระบบผู้ดูแลก่อนจัดการบัญชีหรือซิงก์ออร์เดอร์' }, 401)
     const { data: callerResult, error: callerError } = await admin.auth.getUser(accessToken)
     const caller = callerResult.user
     if (callerError || !caller) return json({ error: 'ไม่สามารถยืนยันผู้ดูแลระบบได้' }, 401)
     const callerDb = createClient(supabaseUrl, anonKey, { auth: { autoRefreshToken: false, persistSession: false }, global: { headers: { Authorization: `Bearer ${accessToken}` } } })
+
+    if (body.action === 'admin_review_merchant_application') {
+      const { data: adminRole } = await admin.from('user_roles').select('role').eq('user_id', caller.id).eq('role', 'admin').maybeSingle()
+      if (!adminRole) return json({ error: 'เฉพาะผู้ดูแลระบบ' }, 403)
+      const appId = text(body.application_id)
+      const decision = text(body.decision)
+      const note = text(body.note).slice(0, 500)
+      if (!appId || !['approve', 'reject'].includes(decision)) return json({ error: 'ข้อมูลไม่ครบ' }, 400)
+      const { data: appRow } = await admin.from('merchant_applications').select('*').eq('id', appId).maybeSingle()
+      if (!appRow) return json({ error: 'ไม่พบใบสมัคร' }, 404)
+      if (appRow.status !== 'pending') return json({ error: 'ใบสมัครนี้ถูกพิจารณาแล้ว' }, 409)
+      if (decision === 'reject') {
+        if (note.length < 3) return json({ error: 'กรุณาระบุเหตุผลอย่างน้อย 3 ตัวอักษร' }, 400)
+        await admin.from('merchant_applications').update({ status: 'rejected', admin_note: note, reviewed_by: caller.id, reviewed_at: new Date().toISOString() }).eq('id', appId)
+        await admin.from('admin_action_audit').insert({ actor_id: caller.id, target_user_id: appRow.user_id, action: 'merchant_application_rejected', after_state: { application_id: appId, note } })
+        return json({ ok: true, status: 'rejected' })
+      }
+      const { data: owned } = await admin.from('stores').select('id').eq('owner_id', appRow.user_id).maybeSingle()
+      if (owned) return json({ error: 'บัญชีนี้มีร้านอยู่แล้ว' }, 409)
+      const storeId = `store-${crypto.randomUUID().slice(0, 8)}`
+      const { error: storeError } = await admin.from('stores').insert({ id: storeId, owner_id: appRow.user_id, owner_email: appRow.email, name: appRow.store_name, phone: appRow.phone, active: true, moderation_status: 'active', registered_address: appRow.address })
+      if (storeError) return json({ error: storeError.message }, 400)
+      await admin.from('merchant_applications').update({ status: 'approved', admin_note: note, store_id: storeId, reviewed_by: caller.id, reviewed_at: new Date().toISOString() }).eq('id', appId)
+      await admin.from('admin_action_audit').insert({ actor_id: caller.id, target_user_id: appRow.user_id, action: 'merchant_application_approved', after_state: { application_id: appId, store_id: storeId } })
+      return json({ ok: true, status: 'approved', store_id: storeId })
+    }
 
     if (body.action === 'report_rider_delivery_issue') {
       const orderId = text(body.order_id)
